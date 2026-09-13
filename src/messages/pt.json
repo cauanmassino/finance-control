@@ -1,0 +1,31 @@
+{
+  "Common": {
+    "appName": "Finance Control",
+    "home": "Início",
+    "dashboard": "Visão geral",
+    "transactions": "Transações",
+    "accounts": "Contas",
+    "cards": "Cartões",
+    "categories": "Categorias",
+    "settings": "Configurações",
+    "login": "Entrar",
+    "register": "Criar conta",
+    "logout": "Sair",
+    "save": "Salvar",
+    "cancel": "Cancelar",
+    "language": "Idioma"
+  },
+  "Home": {
+    "eyebrow": "Controle financeiro pessoal",
+    "title": "Controle seu dinheiro com mais clareza.",
+    "description": "Organize receitas, despesas, contas, cartões e compras parceladas em uma única plataforma.",
+    "primaryAction": "Começar agora",
+    "secondaryAction": "Conhecer a plataforma",
+    "monthlyTitle": "Visão mensal",
+    "monthlyDescription": "Acompanhe receitas, despesas e saldo do mês.",
+    "categoriesTitle": "Categorias",
+    "categoriesDescription": "Entenda para onde seu dinheiro está indo.",
+    "cardsTitle": "Cartões e parcelas",
+    "cardsDescription": "Controle compras parceladas e compromissos futuros."
+  }
+}

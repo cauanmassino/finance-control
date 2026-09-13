@@ -1,0 +1,31 @@
+{
+  "Common": {
+    "appName": "Finance Control",
+    "home": "Home",
+    "dashboard": "Overview",
+    "transactions": "Transactions",
+    "accounts": "Accounts",
+    "cards": "Cards",
+    "categories": "Categories",
+    "settings": "Settings",
+    "login": "Sign in",
+    "register": "Create account",
+    "logout": "Sign out",
+    "save": "Save",
+    "cancel": "Cancel",
+    "language": "Language"
+  },
+  "Home": {
+    "eyebrow": "Personal financial management",
+    "title": "Control your money with more clarity.",
+    "description": "Organize income, expenses, accounts, cards, and installments in one platform.",
+    "primaryAction": "Get started",
+    "secondaryAction": "Explore the platform",
+    "monthlyTitle": "Monthly overview",
+    "monthlyDescription": "Track your monthly income, expenses, and balance.",
+    "categoriesTitle": "Categories",
+    "categoriesDescription": "Understand where your money is going.",
+    "cardsTitle": "Cards and installments",
+    "cardsDescription": "Track installment purchases and future commitments."
+  }
+}
