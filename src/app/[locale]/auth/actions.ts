@@ -3,91 +3,124 @@
 import {redirect} from "next/navigation";
 import {createClient} from "@/lib/supabase/server";
 
-function getLocale(formData: FormData) {
-  const locale = String(formData.get("locale") ?? "pt");
-  return locale === "en" ? "en" : "pt";
+function getText(formData: FormData, field: string) {
+  const value = formData.get(field);
+
+  return typeof value === "string" ? value.trim() : "";
 }
 
-function getAppUrl() {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+function getLocale(formData: FormData) {
+  return getText(formData, "locale") === "en" ? "en" : "pt";
+}
 
-  if (!appUrl) {
-    throw new Error("NEXT_PUBLIC_APP_URL não foi configurada.");
+function loginUrl(locale: string, message?: string) {
+  const url = new URL(`/${locale}/auth/login`, "http://localhost");
+
+  if (message) {
+    url.searchParams.set("message", message);
   }
 
-  return appUrl;
+  return `${url.pathname}${url.search}`;
+}
+
+function registerUrl(locale: string, message: string) {
+  const url = new URL(`/${locale}/register`, "http://localhost");
+
+  url.searchParams.set("error", message);
+
+  return `${url.pathname}${url.search}`;
 }
 
 export async function signUp(formData: FormData) {
-  const supabase = await createClient();
-
   const locale = getLocale(formData);
-  const fullName = String(formData.get("fullName") ?? "").trim();
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const password = String(formData.get("password") ?? "");
+  const fullName = getText(formData, "full_name");
+  const email = getText(formData, "email").toLowerCase();
+  const password = getText(formData, "password");
+  const confirmPassword = getText(formData, "confirm_password");
 
-  if (!fullName || !email || password.length < 8) {
+  const isEnglish = locale === "en";
+
+  if (!fullName) {
     redirect(
-      `/${locale}/register?error=${encodeURIComponent(
-        "Preencha nome, e-mail e uma senha de pelo menos 8 caracteres."
-      )}`
+      registerUrl(
+        locale,
+        isEnglish
+          ? "Please enter your full name."
+          : "Informe seu nome completo.",
+      ),
     );
   }
 
-  const {error} = await supabase.auth.signUp({
+  if (!email || !email.includes("@")) {
+    redirect(
+      registerUrl(
+        locale,
+        isEnglish
+          ? "Enter a valid email address."
+          : "Informe um e-mail válido.",
+      ),
+    );
+  }
+
+  if (password.length < 8) {
+    redirect(
+      registerUrl(
+        locale,
+        isEnglish
+          ? "Your password must contain at least 8 characters."
+          : "A senha precisa ter pelo menos 8 caracteres.",
+      ),
+    );
+  }
+
+  if (password !== confirmPassword) {
+    redirect(
+      registerUrl(
+        locale,
+        isEnglish
+          ? "The passwords do not match."
+          : "As senhas não coincidem.",
+      ),
+    );
+  }
+
+  const supabase = await createClient();
+
+  const origin =
+    process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+
+  const {data, error} = await supabase.auth.signUp({
     email,
     password,
     options: {
       data: {
         full_name: fullName,
-        locale: locale === "en" ? "en" : "pt-BR"
       },
-      emailRedirectTo: `${getAppUrl()}/${locale}/auth/callback`
-    }
+      emailRedirectTo: `${origin}/${locale}/auth/callback`,
+    },
   });
-
-if (error) {
-  console.error("Supabase signUp error:", {
-    message: error.message,
-    status: error.status,
-    code: error.code
-  });
-
-  redirect(
-    `/${locale}/register?error=${encodeURIComponent(error.message)}`
-  );
-}
-
-  redirect(
-    `/${locale}/login?message=${encodeURIComponent(
-      "Conta criada. Verifique seu e-mail para confirmar o cadastro."
-    )}`
-  );
-}
-
-export async function signIn(formData: FormData) {
-  const supabase = await createClient();
-
-  const locale = getLocale(formData);
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const password = String(formData.get("password") ?? "");
-
-  const {error} = await supabase.auth.signInWithPassword({email, password});
 
   if (error) {
-    redirect(
-      `/${locale}/login?error=${encodeURIComponent(
-        "E-mail ou senha inválidos."
-      )}`
-    );
+    const message =
+      error.message === "User already registered"
+        ? isEnglish
+          ? "An account with this email already exists. Sign in instead."
+          : "Já existe uma conta com este e-mail. Entre na sua conta."
+        : error.message;
+
+    redirect(registerUrl(locale, message));
   }
 
-  redirect(`/${locale}/dashboard`);
-}
+  if (data.session) {
+    redirect(`/${locale}/dashboard`);
+  }
 
-export async function signOut(locale: "pt" | "en") {
-  const supabase = await createClient();
-  await supabase.auth.signOut();
-
-  redirect(`/${locale}/login`);
+  redirect(
+    loginUrl(
+      locale,
+      isEnglish
+        ? "Account created. Check your email to confirm your registration."
+        : "Conta criada. Verifique seu e-mail para confirmar o cadastro.",
+    ),
+  );
 }

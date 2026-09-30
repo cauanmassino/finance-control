@@ -18,4 +18,5 @@ export async function GET(
   const safeLocale = locale === "en" ? "en" : "pt";
 
   return NextResponse.redirect(new URL(`/${safeLocale}/dashboard`, requestUrl.origin));
+    new URL(`/${safeLocale}/dashboard`, requestUrl.origin)
 }

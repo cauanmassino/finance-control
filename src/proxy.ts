@@ -1,41 +1,78 @@
-import createIntlMiddleware from "next-intl/middleware";
+import {createServerClient} from "@supabase/ssr";
 import {NextResponse, type NextRequest} from "next/server";
-import {routing} from "./i18n/routing";
-import {updateSession} from "./lib/supabase/update-session";
 
-const intlMiddleware = createIntlMiddleware(routing);
+function getLocale(pathname: string) {
+  return pathname.split("/")[1] === "en" ? "en" : "pt";
+}
+
+function isPublicPath(pathname: string) {
+  return (
+    /^\/(pt|en)\/?$/.test(pathname) ||
+    /^\/(pt|en)\/auth\/login\/?$/.test(pathname) ||
+    /^\/(pt|en)\/register\/?$/.test(pathname) ||
+    /^\/(pt|en)\/auth\/callback\/?$/.test(pathname)
+  );
+}
+
+function isProtectedPath(pathname: string) {
+  return /^\/(pt|en)\/(accounts|alerts|budgets|cards|categories|dashboard|financial-health|goals|onboarding|recurring|reports|transactions|transfers)(\/|$)/.test(
+    pathname,
+  );
+}
 
 export async function proxy(request: NextRequest) {
-  // 1. Resolve locale e possíveis redirects do next-intl.
-  const intlResponse = intlMiddleware(request);
+  let response = NextResponse.next({request});
 
-  // 2. Atualiza/renova a sessão Supabase por meio de cookies.
-  const authResponse = await updateSession(request);
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
 
-  // Se a camada i18n tiver emitido redirect ou rewrite, ela precisa vencer.
-  const isRedirect =
-    intlResponse.headers.get("location") !== null ||
-    intlResponse.status === 307 ||
-    intlResponse.status === 308;
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({name, value}) => {
+            request.cookies.set(name, value);
+          });
 
-  if (isRedirect) {
-    return intlResponse;
+          response = NextResponse.next({request});
+
+          cookiesToSet.forEach(({name, value, options}) => {
+            response.cookies.set(name, value, options);
+          });
+        },
+      },
+    },
+  );
+
+  const {
+    data: {user},
+  } = await supabase.auth.getUser();
+
+  const pathname = request.nextUrl.pathname;
+  const locale = getLocale(pathname);
+  const loginUrl = new URL(`/${locale}/auth/login`, request.url);
+  const dashboardUrl = new URL(`/${locale}/dashboard`, request.url);
+
+  if (!user && isProtectedPath(pathname)) {
+    loginUrl.searchParams.set("next", pathname);
+
+    return NextResponse.redirect(loginUrl);
   }
 
-  // Propaga cookies de auth à resposta associada ao fluxo de locale.
-  authResponse.cookies.getAll().forEach((cookie) => {
-    intlResponse.cookies.set(cookie);
-  });
+  const isLocaleHome = /^\/(pt|en)\/?$/.test(pathname);
 
-  return intlResponse;
+  if (user && isPublicPath(pathname) && !isLocaleHome) {
+    return NextResponse.redirect(dashboardUrl);
+  }
+
+  return response;
 }
 
 export const config = {
   matcher: [
-    /*
-     * Exclui arquivos estáticos e os caminhos internos do Next,
-     * mantendo o proxy ativo para rotas de app e autenticação.
-     */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"
-  ]
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+  ],
 };
