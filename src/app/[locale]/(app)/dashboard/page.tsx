@@ -91,6 +91,20 @@ type BudgetSummaryItem = {
   category: Category;
 };
 
+type CreditCardStatement = {
+  id: string;
+  credit_card_id: string;
+  total_amount: number | string;
+  paid_amount: number | string;
+  status: "open" | "closed" | "overdue" | "paid";
+};
+
+type CreditCardTransaction = {
+  id: string;
+  amount: number | string;
+  credit_card_statement_id: string | null;
+};
+
 function getFirstRelation<T>(
   relation: T[] | T | null | undefined,
 ): T | null {
@@ -178,27 +192,32 @@ export default async function DashboardPage({
     data: {user},
   } = await supabase.auth.getUser();
 
-if (!user) {
-  redirect(`/${locale}/auth/login`);
-}
+  if (!user) {
+    redirect(`/${locale}/auth/login`);
+  }
 
-const {data: profile, error: profileError} = await supabase
-  .from("profiles")
-  .select("onboarding_completed")
-  .eq("id", user.id)
-  .maybeSingle();
+  const {data: profile, error: profileError} = await supabase
+    .from("profiles")
+    .select("onboarding_completed")
+    .eq("id", user.id)
+    .maybeSingle();
 
-if (profileError) {
-  console.error("Erro ao carregar perfil do dashboard:", profileError);
-}
+  if (profileError) {
+    console.error("Erro ao carregar perfil do dashboard:", profileError);
+  }
 
-if (!profile?.onboarding_completed) {
-  redirect(`/${locale}/onboarding`);
-}
+  if (!profile?.onboarding_completed) {
+    redirect(`/${locale}/onboarding`);
+  }
 
-const now = new Date();
+  const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const nextMonthStart = new Date(
+    now.getFullYear(),
+    now.getMonth() + 1,
+    1,
+  );
+
   const sixMonthsStart = new Date(
     now.getFullYear(),
     now.getMonth() - 5,
@@ -218,6 +237,8 @@ const now = new Date();
     {data: cashFlowData, error: cashFlowError},
     {data: categoryExpenseData, error: categoryExpenseError},
     {data: budgetsData, error: budgetsError},
+    {data: creditCardStatements, error: creditCardStatementsError},
+    {data: creditCardTransactions, error: creditCardTransactionsError},
   ] = await Promise.all([
     supabase
       .from("accounts")
@@ -310,6 +331,25 @@ const now = new Date();
       `)
       .eq("user_id", user.id)
       .eq("month", monthStartText),
+
+    supabase
+      .from("credit_card_statements")
+      .select("id, credit_card_id, total_amount, paid_amount, status")
+      .eq("user_id", user.id)
+      .in("status", ["open", "closed", "overdue"]),
+
+    /*
+     * Esta consulta garante que transações de cartão recém-criadas
+     * também sejam consideradas, mesmo se uma fatura ainda não tiver
+     * sido recalculada por algum motivo.
+     */
+    supabase
+      .from("transactions")
+      .select("id, amount, credit_card_statement_id")
+      .eq("user_id", user.id)
+      .eq("type", "expense")
+      .eq("payment_method", "credit_card")
+      .not("credit_card_id", "is", null),
   ]);
 
   const loadError =
@@ -320,7 +360,9 @@ const now = new Date();
     recurringError ??
     cashFlowError ??
     categoryExpenseError ??
-    budgetsError;
+    budgetsError ??
+    creditCardStatementsError ??
+    creditCardTransactionsError;
 
   if (loadError) {
     console.error("Erro ao carregar dashboard:", {
@@ -332,6 +374,11 @@ const now = new Date();
   }
 
   const typedAccounts = (accounts ?? []) as Account[];
+  const typedCreditCardStatements =
+    (creditCardStatements ?? []) as CreditCardStatement[];
+
+  const typedCreditCardTransactions =
+    (creditCardTransactions ?? []) as CreditCardTransaction[];
 
   const income = (monthTransactions ?? [])
     .filter((transaction) => transaction.type === "income")
@@ -386,6 +433,39 @@ const now = new Date();
     (total, account) => total + account.balance,
     0,
   );
+
+  /*
+   * DÍVIDA OFICIAL:
+   * Cada fatura pendente contribui com seu total menos pagamentos.
+   */
+  const statementDebt = typedCreditCardStatements.reduce(
+    (total, statement) => {
+      const statementTotal = Number(statement.total_amount ?? 0);
+      const paidAmount = Number(statement.paid_amount ?? 0);
+
+      return total + Math.max(statementTotal - paidAmount, 0);
+    },
+    0,
+  );
+
+  /*
+   * PROTEÇÃO PARA COMPRAS SEM FATURA:
+   * Caso uma transação de cartão esteja sem credit_card_statement_id,
+   * ela não pode ficar fora do patrimônio.
+   *
+   * Transações que já estão ligadas à fatura não são somadas novamente,
+   * evitando desconto duplicado.
+   */
+  const unlinkedCreditCardDebt = typedCreditCardTransactions
+    .filter((transaction) => !transaction.credit_card_statement_id)
+    .reduce(
+      (total, transaction) => total + Number(transaction.amount),
+      0,
+    );
+
+  const totalCreditCardDebt = statementDebt + unlinkedCreditCardDebt;
+
+  const netWorth = totalBalance - totalCreditCardDebt;
 
   const accountBalancesWithShare = accountBalances.map((account) => ({
     ...account,
@@ -479,7 +559,7 @@ const now = new Date();
       ...category,
       percentage:
         expenses > 0 ? Math.min((category.amount / expenses) * 100, 100) : 0,
-  }));
+    }));
 
   const spentByCategory = new Map<string, number>();
 
@@ -617,18 +697,35 @@ const now = new Date();
           },
         ]
       : []),
-    ...(totalBalance < 0
+    ...(totalCreditCardDebt > 0
       ? [
           {
-            id: "balance-alert",
+            id: "credit-card-debt",
+            level: "warning" as const,
+            title: isEnglish
+              ? "Credit card bills are open"
+              : "Existem faturas de cartão em aberto",
+            description: isEnglish
+              ? `You currently owe ${formatCurrency(totalCreditCardDebt, locale)} on credit cards.`
+              : `Você possui ${formatCurrency(totalCreditCardDebt, locale)} em faturas de cartão pendentes.`,
+            href: `/${locale}/cards`,
+            iconName: "wallet",
+            color: "#fcd34d",
+          },
+        ]
+      : []),
+    ...(netWorth < 0
+      ? [
+          {
+            id: "net-worth-alert",
             level: "danger" as const,
             title: isEnglish
-              ? "Your total balance is negative"
-              : "Seu saldo total está negativo",
+              ? "Your net worth is negative"
+              : "Seu patrimônio líquido está negativo",
             description: isEnglish
-              ? "Review your accounts and recent expenses."
-              : "Revise suas contas e despesas recentes.",
-            href: `/${locale}/accounts`,
+              ? "Your debts are greater than the money tracked in your accounts."
+              : "Suas dívidas são maiores que o dinheiro registrado nas suas contas.",
+            href: `/${locale}/cards`,
             iconName: "wallet",
             color: "#fda4af",
           },
@@ -671,15 +768,15 @@ const now = new Date();
 
             <div className="mt-7">
               <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-400">
-                {isEnglish ? "Total balance" : "Saldo total"}
+                {isEnglish ? "Net worth" : "Patrimônio líquido"}
               </p>
 
               <p
                 className={`mt-2 font-[family-name:var(--font-display)] text-4xl font-semibold tracking-[-0.065em] sm:text-5xl lg:text-6xl ${
-                  totalBalance >= 0 ? "text-white" : "text-rose-300"
+                  netWorth >= 0 ? "text-white" : "text-rose-300"
                 }`}
               >
-                {formatCurrency(totalBalance, locale)}
+                {formatCurrency(netWorth, locale)}
               </p>
 
               <div
@@ -697,6 +794,34 @@ const now = new Date();
                   }`}
                 />
                 {balanceStatus}
+              </div>
+
+              <div className="mt-5 grid max-w-xl gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-3.5">
+                  <p className="text-xs font-medium uppercase tracking-[0.11em] text-slate-500">
+                    {isEnglish ? "Accounts balance" : "Saldo em contas"}
+                  </p>
+
+                  <p
+                    className={`mt-1.5 text-lg font-semibold ${
+                      totalBalance >= 0
+                        ? "text-slate-100"
+                        : "text-rose-300"
+                    }`}
+                  >
+                    {formatCurrency(totalBalance, locale)}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-rose-300/15 bg-rose-400/[0.06] p-3.5">
+                  <p className="text-xs font-medium uppercase tracking-[0.11em] text-rose-200/60">
+                    {isEnglish ? "Open card bills" : "Faturas em aberto"}
+                  </p>
+
+                  <p className="mt-1.5 text-lg font-semibold text-rose-300">
+                    -{formatCurrency(totalCreditCardDebt, locale)}
+                  </p>
+                </div>
               </div>
             </div>
           </div>

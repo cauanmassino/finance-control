@@ -51,6 +51,16 @@ function formatAmountForInput(amount: number) {
   return amount.toFixed(2).replace(".", ",");
 }
 
+function normalizePaymentMethod(value: string | null) {
+  const legacyPaymentMethods: Record<string, string> = {
+    debitcard: "debit_card",
+    creditcard: "credit_card",
+    banktransfer: "bank_transfer",
+  };
+
+  return legacyPaymentMethods[value ?? ""] ?? value ?? "";
+}
+
 export function EditTransactionForm({
   locale,
   accounts,
@@ -75,6 +85,8 @@ export function EditTransactionForm({
   const hasNegativeBalanceWarning =
     Boolean(state.requiresNegativeBalanceConfirmation) &&
     Boolean(state.warning);
+
+  const paymentMethod = normalizePaymentMethod(transaction.payment_method);
 
   return (
     <form
@@ -245,7 +257,7 @@ export function EditTransactionForm({
 
             <select
               name="payment_method"
-              defaultValue={transaction.payment_method ?? ""}
+              defaultValue={paymentMethod}
               disabled={isPending}
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none focus:border-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -268,7 +280,7 @@ export function EditTransactionForm({
               </option>
 
               <option value="bank_transfer">
-                {isEnglish ? "Bank transfer" : "Transferência"}
+                {isEnglish ? "Bank transfer" : "Transferência bancária"}
               </option>
 
               <option value="boleto">Boleto</option>

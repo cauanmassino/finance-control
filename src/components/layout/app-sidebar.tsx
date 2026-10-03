@@ -39,6 +39,12 @@ const navigationItems = [
     icon: "▣",
   },
   {
+    href: "/cards",
+    label: "Cartões",
+    labelEn: "Cards",
+    icon: "▤",
+  },
+  {
     href: "/categories",
     label: "Categorias",
     labelEn: "Categories",
@@ -88,6 +94,7 @@ export function AppSidebar({locale}: AppSidebarProps) {
       <nav className="flex gap-2 overflow-x-auto px-3 py-3 md:flex-col md:overflow-visible md:px-4 md:py-4">
         {navigationItems.map((item) => {
           const href = `/${currentLocale}${item.href}`;
+
           const isActive =
             pathname === href || pathname.startsWith(`${href}/`);
 

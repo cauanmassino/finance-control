@@ -11,7 +11,6 @@ import {CashFlowForecast} from "@/components/financial-health/cash-flow-forecast
 import {SpendingFrequencyInsight} from "@/components/financial-health/spending-frequency-insight";
 import {FinancialHealthPeriodFilter} from "@/components/financial-health/financial-health-period-filter";
 
-
 export const metadata: Metadata = {
   title: "Saúde financeira",
   description:
@@ -49,6 +48,9 @@ type Transaction = {
   occurred_on: string;
   account_id: string | null;
   transfer_account_id: string | null;
+  credit_card_id: string | null;
+  credit_card_statement_id: string | null;
+  payment_method: string | null;
   category_id: string | null;
   category: Category[] | Category | null;
 };
@@ -67,8 +69,29 @@ type Budget = {
   amount: number | string;
 };
 
-type NetWorthPoint = {label: string; value: number; isCurrent?: boolean};
-type ExpenseTrendPoint = {label: string; value: number; isCurrent?: boolean};
+type CreditCardStatement = {
+  id: string;
+  credit_card_id: string;
+  period_start: string;
+  period_end: string;
+  closing_date: string;
+  due_date: string;
+  total_amount: number | string;
+  paid_amount: number | string;
+  status: "open" | "closed" | "overdue" | "paid";
+};
+
+type NetWorthPoint = {
+  label: string;
+  value: number;
+  isCurrent?: boolean;
+};
+
+type ExpenseTrendPoint = {
+  label: string;
+  value: number;
+  isCurrent?: boolean;
+};
 
 type CategoryExpense = {
   id: string;
@@ -79,16 +102,24 @@ type CategoryExpense = {
   percentage: number;
 };
 
-function getFirstRelation<T>(relation: T[] | T | null | undefined): T | null {
+function getFirstRelation<T>(
+  relation: T[] | T | null | undefined,
+): T | null {
   return Array.isArray(relation) ? relation[0] ?? null : relation ?? null;
 }
 
 function toDateString(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+    2,
+    "0",
+  )}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function getMonthKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+    2,
+    "0",
+  )}`;
 }
 
 function getMonthStart(date: Date) {
@@ -181,8 +212,66 @@ function calculateAccountBalanceAtDate(
   }, Number(account.initial_balance ?? 0));
 }
 
-function getCurrentAccountBalance(account: Account, transactions: Transaction[]) {
+function getCurrentAccountBalance(
+  account: Account,
+  transactions: Transaction[],
+) {
   return calculateAccountBalanceAtDate(account, transactions, "9999-12-31");
+}
+
+/*
+ * Para o patrimônio atual, a dívida é a soma das faturas ainda pendentes:
+ *
+ * total_amount - paid_amount
+ *
+ * Faturas pagas não entram como passivo.
+ */
+function calculateCurrentCreditCardDebt(
+  statements: CreditCardStatement[],
+) {
+  return statements
+    .filter((statement) =>
+      ["open", "closed", "overdue"].includes(statement.status),
+    )
+    .reduce((total, statement) => {
+      const totalAmount = Number(statement.total_amount ?? 0);
+      const paidAmount = Number(statement.paid_amount ?? 0);
+
+      return total + Math.max(totalAmount - paidAmount, 0);
+    }, 0);
+}
+
+/*
+ * Para o gráfico histórico, usamos as compras no cartão realizadas antes
+ * do fim de cada mês. Isso faz uma compra no crédito reduzir o patrimônio
+ * no dia em que foi feita, e não apenas no dia de pagamento da fatura.
+ *
+ * A coluna payment_method pode conter "card" em dados antigos ou
+ * "credit_card" em lançamentos atuais, por isso aceitamos os dois.
+ */
+function calculateCreditCardDebtAtDate(
+  transactions: Transaction[],
+  endDateExclusive: string,
+) {
+  return transactions.reduce((total, transaction) => {
+    const isCreditCardExpense =
+      transaction.type === "expense" &&
+      Boolean(transaction.credit_card_id) &&
+      (
+        transaction.payment_method === "credit_card" ||
+        transaction.payment_method === "card"
+      );
+
+    if (!isCreditCardExpense) {
+      return total;
+    }
+
+    if (transaction.occurred_on >= endDateExclusive) {
+      return total;
+    }
+
+    return total + Number(transaction.amount);
+  }, 0);
 }
 
 export default async function FinancialHealthPage({
@@ -201,7 +290,9 @@ export default async function FinancialHealthPage({
     requestedPeriod === "all"
       ? requestedPeriod
       : "6";
+
   const supabase = await createClient();
+
   const {
     data: {user},
   } = await supabase.auth.getUser();
@@ -221,6 +312,7 @@ export default async function FinancialHealthPage({
     {data: transactionsData, error: transactionsError},
     {data: recurringData, error: recurringError},
     {data: budgetsData, error: budgetsError},
+    {data: creditCardStatementsData, error: creditCardStatementsError},
   ] = await Promise.all([
     supabase
       .from("accounts")
@@ -238,6 +330,9 @@ export default async function FinancialHealthPage({
         occurred_on,
         account_id,
         transfer_account_id,
+        credit_card_id,
+        credit_card_statement_id,
+        payment_method,
         category_id,
         category:categories!transactions_category_id_fkey (
           id,
@@ -261,16 +356,37 @@ export default async function FinancialHealthPage({
       .select("id, amount")
       .eq("user_id", user.id)
       .eq("month", currentMonthStartText),
+
+    /*
+     * Faturas abertas, fechadas ou vencidas ainda representam uma dívida.
+     */
+    supabase
+      .from("credit_card_statements")
+      .select(`
+        id,
+        credit_card_id,
+        period_start,
+        period_end,
+        closing_date,
+        due_date,
+        total_amount,
+        paid_amount,
+        status
+      `)
+      .eq("user_id", user.id)
+      .in("status", ["open", "closed", "overdue"]),
   ]);
 
   const loadError =
     accountsError ??
     transactionsError ??
     recurringError ??
-    budgetsError;
+    budgetsError ??
+    creditCardStatementsError;
 
   if (loadError) {
     console.error("Erro ao carregar saúde financeira:", loadError);
+
     throw new Error(
       isEnglish
         ? "Unable to load financial health data."
@@ -278,37 +394,42 @@ export default async function FinancialHealthPage({
     );
   }
 
-const accounts = (accountsData ?? []) as Account[];
-const transactions = (transactionsData ?? []) as unknown as Transaction[];
-const budgets = (budgetsData ?? []) as Budget[];
+  const accounts = (accountsData ?? []) as Account[];
+  const transactions = (transactionsData ?? []) as unknown as Transaction[];
+  const budgets = (budgetsData ?? []) as Budget[];
+  const creditCardStatements =
+    (creditCardStatementsData ?? []) as CreditCardStatement[];
 
-const earliestTransactionDate = transactions[0]?.occurred_on ?? null;
+  const earliestTransactionDate = transactions[0]?.occurred_on ?? null;
 
-const allTimeMonthCount = earliestTransactionDate
-  ? Math.max(
-      (now.getFullYear() - Number(earliestTransactionDate.slice(0, 4))) * 12 +
-        (now.getMonth() -
-          (Number(earliestTransactionDate.slice(5, 7)) - 1)) +
+  const allTimeMonthCount = earliestTransactionDate
+    ? Math.max(
+        (now.getFullYear() - Number(earliestTransactionDate.slice(0, 4))) *
+          12 +
+          (
+            now.getMonth() -
+            (Number(earliestTransactionDate.slice(5, 7)) - 1)
+          ) +
+          1,
         1,
-      1,
-    )
-  : 1;
+      )
+    : 1;
 
-const visibleMonthCount =
-  selectedPeriod === "all"
-    ? allTimeMonthCount
-    : Number(selectedPeriod);
+  const visibleMonthCount =
+    selectedPeriod === "all"
+      ? allTimeMonthCount
+      : Number(selectedPeriod);
 
-const months = getLastMonths(visibleMonthCount, locale);
+  const months = getLastMonths(visibleMonthCount, locale);
 
-const periodLabel =
-  selectedPeriod === "all"
-    ? isEnglish
-      ? "All available history"
-      : "Todo o histórico disponível"
-    : isEnglish
-      ? `Last ${visibleMonthCount} months`
-      : `Últimos ${visibleMonthCount} meses`;
+  const periodLabel =
+    selectedPeriod === "all"
+      ? isEnglish
+        ? "All available history"
+        : "Todo o histórico disponível"
+      : isEnglish
+        ? `Last ${visibleMonthCount} months`
+        : `Últimos ${visibleMonthCount} meses`;
 
   const recurringCosts = (recurringData ?? []).map((item) => {
     const recurring = item as RecurringTransaction;
@@ -323,22 +444,53 @@ const periodLabel =
     };
   });
 
-  const currentNetWorth = accounts.reduce(
+  /*
+   * Saldo total mantido em contas. Compras no cartão não alteram este valor.
+   */
+  const currentAccountBalance = accounts.reduce(
     (total, account) =>
       total + getCurrentAccountBalance(account, transactions),
     0,
   );
 
-  const netWorthHistory: NetWorthPoint[] = months.map((month) => ({
-    label: month.label,
-    value: accounts.reduce(
+  /*
+   * Dívida atual de cartão. É o passivo que reduz o patrimônio.
+   */
+  const totalCreditCardDebt = calculateCurrentCreditCardDebt(
+    creditCardStatements,
+  );
+
+  /*
+   * Patrimônio líquido verdadeiro:
+   *
+   * ativos em contas - dívida pendente dos cartões.
+   */
+  const currentNetWorth =
+    currentAccountBalance - totalCreditCardDebt;
+
+  const netWorthHistory: NetWorthPoint[] = months.map((month) => {
+    const accountBalanceAtMonthEnd = accounts.reduce(
       (total, account) =>
         total +
-        calculateAccountBalanceAtDate(account, transactions, month.end),
+        calculateAccountBalanceAtDate(
+          account,
+          transactions,
+          month.end,
+        ),
       0,
-    ),
-    isCurrent: month.isCurrent,
-  }));
+    );
+
+    const creditCardDebtAtMonthEnd = calculateCreditCardDebtAtDate(
+      transactions,
+      month.end,
+    );
+
+    return {
+      label: month.label,
+      value: accountBalanceAtMonthEnd - creditCardDebtAtMonthEnd,
+      isCurrent: month.isCurrent,
+    };
+  });
 
   if (netWorthHistory.length > 0) {
     netWorthHistory[netWorthHistory.length - 1] = {
@@ -348,8 +500,11 @@ const periodLabel =
     };
   }
 
-  const previousNetWorth = netWorthHistory.at(-2)?.value ?? currentNetWorth;
+  const previousNetWorth =
+    netWorthHistory.at(-2)?.value ?? currentNetWorth;
+
   const netWorthChange = currentNetWorth - previousNetWorth;
+
   const netWorthChangePercentage =
     previousNetWorth !== 0
       ? (netWorthChange / Math.abs(previousNetWorth)) * 100
@@ -378,9 +533,13 @@ const periodLabel =
     (total, budget) => total + Number(budget.amount),
     0,
   );
-  const spendingReference = totalBudget > 0 ? totalBudget : expenseAverage;
+
+  const spendingReference =
+    totalBudget > 0 ? totalBudget : expenseAverage;
+
   const usingBudget = totalBudget > 0;
   const dayOfMonth = now.getDate();
+
   const daysInMonth = new Date(
     now.getFullYear(),
     now.getMonth() + 1,
@@ -402,6 +561,7 @@ const periodLabel =
     .reduce((total, transaction) => total + Number(transaction.amount), 0);
 
   const currentMonthResult = currentIncome - currentExpenses;
+
   const savingsRate =
     currentIncome > 0
       ? Math.max((currentMonthResult / currentIncome) * 100, 0)
@@ -423,6 +583,7 @@ const periodLabel =
     .forEach((transaction) => {
       const category = getFirstRelation(transaction.category);
       const categoryId = category?.id ?? "uncategorized";
+
       const item = categoryMap.get(categoryId) ?? {
         id: categoryId,
         name: category?.name ?? (isEnglish ? "No category" : "Sem categoria"),
@@ -463,8 +624,12 @@ const periodLabel =
         transaction.description.trim().length > 0,
     )
     .forEach((transaction) => {
-      const normalizedDescription = normalizeDescription(transaction.description);
+      const normalizedDescription = normalizeDescription(
+        transaction.description,
+      );
+
       const category = getFirstRelation(transaction.category);
+
       const existing = spendingPatternMap.get(normalizedDescription) ?? {
         id: normalizedDescription,
         label: transaction.description.trim(),
@@ -481,7 +646,8 @@ const periodLabel =
   const spendingPatterns = Array.from(spendingPatternMap.values())
     .map((pattern) => ({
       ...pattern,
-      averageTicket: pattern.count > 0 ? pattern.total / pattern.count : 0,
+      averageTicket:
+        pattern.count > 0 ? pattern.total / pattern.count : 0,
     }))
     .sort((first, second) => {
       if (second.total !== first.total) {
@@ -492,7 +658,10 @@ const periodLabel =
     });
 
   const biggestCategory = categoryExpenses[0] ?? null;
-  const currentExpenseDifference = currentExpenses - expenseAverage;
+
+  const currentExpenseDifference =
+    currentExpenses - expenseAverage;
+
   const currentExpenseDifferencePercentage =
     expenseAverage > 0
       ? (currentExpenseDifference / expenseAverage) * 100
@@ -534,10 +703,13 @@ const periodLabel =
   const forecastItems = recurringCosts
     .filter(
       (item) =>
-        item.nextOccurrence && item.nextOccurrence >= currentMonthStartText,
+        item.nextOccurrence &&
+        item.nextOccurrence >= currentMonthStartText,
     )
     .sort((first, second) =>
-      String(first.nextOccurrence).localeCompare(String(second.nextOccurrence)),
+      String(first.nextOccurrence).localeCompare(
+        String(second.nextOccurrence),
+      ),
     )
     .slice(0, 12);
 
@@ -545,6 +717,7 @@ const periodLabel =
 
   const cashFlowForecastItems = forecastItems.map((item) => {
     const amount = Number(item.amount);
+
     projectedBalance += item.type === "income" ? amount : -amount;
 
     return {
@@ -564,26 +737,31 @@ const periodLabel =
           aria-hidden="true"
           className="pointer-events-none absolute -right-24 -top-28 h-72 w-72 rounded-full bg-cyan-400/15 blur-3xl"
         />
+
         <div
           aria-hidden="true"
           className="pointer-events-none absolute bottom-0 left-1/3 h-44 w-80 rounded-full bg-emerald-400/10 blur-3xl"
         />
+
         <div className="relative flex flex-col gap-7 xl:flex-row xl:items-end xl:justify-between">
           <div className="max-w-2xl">
             <p className="app-kicker">
               {isEnglish ? "Financial intelligence" : "Inteligência financeira"}
             </p>
+
             <h1 className="mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] text-white sm:text-4xl lg:text-5xl">
               {isEnglish
                 ? "Understand the health of your money."
                 : "Entenda a saúde do seu dinheiro."}
             </h1>
+
             <p className="mt-3 max-w-xl text-sm leading-6 text-slate-300 sm:text-base">
               {isEnglish
                 ? "Track your net worth, spending patterns, and the decisions that shape your financial future."
                 : "Acompanhe seu patrimônio, padrões de gasto e as decisões que moldam seu futuro financeiro."}
             </p>
           </div>
+
           <Link
             href={`/${locale}/transactions/new`}
             className="app-shine inline-flex h-12 shrink-0 items-center justify-center rounded-xl bg-emerald-300 px-5 text-sm font-bold text-emerald-950 shadow-[0_16px_34px_rgba(16,185,129,0.2)] transition hover:-translate-y-0.5 hover:bg-emerald-200"
@@ -614,20 +792,37 @@ const periodLabel =
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <article className="app-surface app-surface-hover rounded-3xl p-5 sm:p-6">
           <p className="text-sm font-medium text-slate-400">
-            {isEnglish ? "Net worth" : "Patrimônio total"}
+            {isEnglish ? "Net worth" : "Patrimônio líquido"}
           </p>
-          <p className={`mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] ${currentNetWorth >= 0 ? "text-slate-100" : "text-rose-300"}`}>
+
+          <p
+            className={`mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] ${
+              currentNetWorth >= 0 ? "text-slate-100" : "text-rose-300"
+            }`}
+          >
             {formatCurrency(currentNetWorth, locale)}
           </p>
-          <p className={`mt-5 text-xs font-semibold ${netWorthChange >= 0 ? "text-emerald-200" : "text-rose-200"}`}>
+
+          <p
+            className={`mt-5 text-xs font-semibold ${
+              netWorthChange >= 0
+                ? "text-emerald-200"
+                : "text-rose-200"
+            }`}
+          >
             {netWorthChange >= 0 ? "+" : ""}
             {formatCurrency(netWorthChange, locale)}
             {previousNetWorth !== 0
-              ? ` (${netWorthChange >= 0 ? "+" : ""}${netWorthChangePercentage.toFixed(1)}%)`
+              ? ` (${
+                  netWorthChange >= 0 ? "+" : ""
+                }${netWorthChangePercentage.toFixed(1)}%)`
               : ""}
           </p>
+
           <p className="mt-1 text-xs text-slate-500">
-            {isEnglish ? "Compared with the previous month." : "Em comparação ao mês anterior."}
+            {isEnglish
+              ? "Compared with the previous month."
+              : "Em comparação ao mês anterior."}
           </p>
         </article>
 
@@ -635,14 +830,34 @@ const periodLabel =
           <p className="text-sm font-medium text-slate-400">
             {isEnglish ? "Monthly result" : "Resultado do mês"}
           </p>
-          <p className={`mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] ${currentMonthResult >= 0 ? "text-emerald-200" : "text-rose-300"}`}>
+
+          <p
+            className={`mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] ${
+              currentMonthResult >= 0
+                ? "text-emerald-200"
+                : "text-rose-300"
+            }`}
+          >
             {currentMonthResult >= 0 ? "+" : ""}
             {formatCurrency(currentMonthResult, locale)}
           </p>
+
           <p className="mt-5 text-xs text-slate-400">
             {isEnglish
-              ? `${formatCurrency(currentIncome, locale)} in income and ${formatCurrency(currentExpenses, locale)} in expenses.`
-              : `${formatCurrency(currentIncome, locale)} em receitas e ${formatCurrency(currentExpenses, locale)} em despesas.`}
+              ? `${formatCurrency(
+                  currentIncome,
+                  locale,
+                )} in income and ${formatCurrency(
+                  currentExpenses,
+                  locale,
+                )} in expenses.`
+              : `${formatCurrency(
+                  currentIncome,
+                  locale,
+                )} em receitas e ${formatCurrency(
+                  currentExpenses,
+                  locale,
+                )} em despesas.`}
           </p>
         </article>
 
@@ -650,9 +865,19 @@ const periodLabel =
           <p className="text-sm font-medium text-slate-400">
             {isEnglish ? "Saving rate" : "Taxa de poupança"}
           </p>
-          <p className={`mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] ${savingsRate >= 20 ? "text-emerald-200" : savingsRate > 0 ? "text-amber-200" : "text-rose-300"}`}>
+
+          <p
+            className={`mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] ${
+              savingsRate >= 20
+                ? "text-emerald-200"
+                : savingsRate > 0
+                  ? "text-amber-200"
+                  : "text-rose-300"
+            }`}
+          >
             {savingsRate.toFixed(0)}%
           </p>
+
           <p className="mt-5 text-xs text-slate-400">
             {currentIncome > 0
               ? isEnglish
@@ -668,14 +893,26 @@ const periodLabel =
           <p className="text-sm font-medium text-slate-400">
             {isEnglish ? "Largest expense" : "Maior gasto"}
           </p>
+
           <p className="mt-3 truncate font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] text-slate-100">
             {biggestCategory?.name ?? "—"}
           </p>
+
           <p className="mt-5 text-xs text-slate-400">
             {biggestCategory
               ? isEnglish
-                ? `${formatCurrency(biggestCategory.amount, locale)} · ${biggestCategory.percentage.toFixed(1)}% of this month's expenses.`
-                : `${formatCurrency(biggestCategory.amount, locale)} · ${biggestCategory.percentage.toFixed(1)}% das despesas deste mês.`
+                ? `${formatCurrency(
+                    biggestCategory.amount,
+                    locale,
+                  )} · ${biggestCategory.percentage.toFixed(
+                    1,
+                  )}% of this month's expenses.`
+                : `${formatCurrency(
+                    biggestCategory.amount,
+                    locale,
+                  )} · ${biggestCategory.percentage.toFixed(
+                    1,
+                  )}% das despesas deste mês.`
               : isEnglish
                 ? "No categorized expenses this month."
                 : "Não há despesas categorizadas neste mês."}
@@ -685,16 +922,24 @@ const periodLabel =
 
       <section className="rounded-[1.7rem] border border-cyan-300/15 bg-gradient-to-r from-cyan-300/[0.09] via-slate-900/30 to-emerald-300/[0.07] p-5 sm:p-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10 text-xl text-cyan-100">✦</span>
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10 text-xl text-cyan-100">
+            ✦
+          </span>
+
           <div className="min-w-0 flex-1">
             <p className="app-kicker text-cyan-100/80">
               {isEnglish ? "Financial diagnosis" : "Diagnóstico financeiro"}
             </p>
+
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200 sm:text-base">
               {financialDiagnosis}
             </p>
           </div>
-          <Link href={`/${locale}/alerts`} className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] px-4 text-xs font-bold text-slate-200 transition hover:bg-white/[0.1] hover:text-white">
+
+          <Link
+            href={`/${locale}/alerts`}
+            className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] px-4 text-xs font-bold text-slate-200 transition hover:bg-white/[0.1] hover:text-white"
+          >
             {isEnglish ? "View alerts" : "Ver alertas"} →
           </Link>
         </div>
@@ -703,8 +948,17 @@ const periodLabel =
       <NetWorthChart data={netWorthHistory} locale={locale} />
 
       <section className="grid gap-5 xl:grid-cols-[1.12fr_0.88fr]">
-        <ExpenseTrendChart data={expenseTrend} average={expenseAverage} locale={locale} />
-        <CategoryExpensesChart data={categoryExpenses} total={currentExpenses} locale={locale} />
+        <ExpenseTrendChart
+          data={expenseTrend}
+          average={expenseAverage}
+          locale={locale}
+        />
+
+        <CategoryExpensesChart
+          data={categoryExpenses}
+          total={currentExpenses}
+          locale={locale}
+        />
       </section>
 
       <RecurringCostsInsight data={recurringCosts} locale={locale} />
@@ -732,21 +986,35 @@ const periodLabel =
             <p className="app-kicker">
               {isEnglish ? "Next improvement" : "Próxima melhoria"}
             </p>
+
             <h2 className="mt-2 font-[family-name:var(--font-display)] text-xl font-semibold tracking-[-0.04em] text-white">
-              {isEnglish ? "Build a clearer financial future" : "Construa um futuro financeiro mais claro"}
+              {isEnglish
+                ? "Build a clearer financial future"
+                : "Construa um futuro financeiro mais claro"}
             </h2>
+
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
               {isEnglish
                 ? "Keep transactions categorized and recurring items updated. Your future insights will identify subscriptions, recurring commitments, spending pace, and projected cash flow."
                 : "Mantenha lançamentos categorizados e recorrências atualizadas. Seus próximos insights identificarão assinaturas, compromissos fixos, ritmo de gasto e fluxo de caixa projetado."}
             </p>
           </div>
+
           <div className="flex shrink-0 flex-wrap gap-3">
-            <Link href={`/${locale}/categories`} className="inline-flex h-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.045] px-4 text-xs font-bold text-slate-300 transition hover:bg-white/[0.09] hover:text-white">
+            <Link
+              href={`/${locale}/categories`}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.045] px-4 text-xs font-bold text-slate-300 transition hover:bg-white/[0.09] hover:text-white"
+            >
               {isEnglish ? "Manage categories" : "Gerenciar categorias"}
             </Link>
-            <Link href={`/${locale}/recurring`} className="inline-flex h-10 items-center justify-center rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-4 text-xs font-bold text-emerald-100 transition hover:bg-emerald-300/15">
-              {isEnglish ? "Review recurring items" : "Revisar recorrências"}
+
+            <Link
+              href={`/${locale}/recurring`}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-4 text-xs font-bold text-emerald-100 transition hover:bg-emerald-300/15"
+            >
+              {isEnglish
+                ? "Review recurring items"
+                : "Revisar recorrências"}
             </Link>
           </div>
         </div>

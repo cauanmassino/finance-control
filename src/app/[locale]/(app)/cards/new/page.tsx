@@ -1,17 +1,9 @@
 import {redirect} from "next/navigation";
 import {createClient} from "@/lib/supabase/server";
-import {TransactionForm} from "@/components/transactions/transaction-form";
+import {CreditCardForm} from "@/components/cards/credit-card-form";
 
 type PageProps = {
   params: Promise<{locale: string}>;
-};
-
-type CardOption = {
-  id: string;
-  name: string;
-  institution: string | null;
-  brand: string | null;
-  last_four: string | null;
 };
 
 type AccountOption = {
@@ -19,13 +11,7 @@ type AccountOption = {
   name: string;
 };
 
-type CategoryOption = {
-  id: string;
-  name: string;
-  type: "income" | "expense";
-};
-
-export default async function NewTransactionPage({params}: PageProps) {
+export default async function NewCardPage({params}: PageProps) {
   const {locale: requestedLocale} = await params;
   const locale = requestedLocale === "en" ? "en" : "pt";
   const isEnglish = locale === "en";
@@ -40,28 +26,22 @@ export default async function NewTransactionPage({params}: PageProps) {
     redirect(`/${locale}/auth/login`);
   }
 
-  const [{data: cards}, {data: accounts}, {data: categories}] = await Promise.all([
-    supabase
-      .from("credit_cards")
-      .select("id, name, institution, brand, last_four")
-      .eq("user_id", user.id)
-      .eq("is_active", true)
-      .order("name", {ascending: true}),
-    supabase
-      .from("accounts")
-      .select("id, name")
-      .eq("user_id", user.id)
-      .order("name", {ascending: true}),
-    supabase
-      .from("categories")
-      .select("id, name, type")
-      .eq("user_id", user.id)
-      .order("name", {ascending: true}),
-  ]);
+  const {data: accounts, error: accountsError} = await supabase
+    .from("accounts")
+    .select("id, name")
+    .eq("user_id", user.id)
+    .order("name", {ascending: true});
 
-  const typedCards = (cards ?? []) as CardOption[];
+  if (accountsError) {
+    console.error("Erro ao carregar contas para o cartão:", accountsError);
+    throw new Error(
+      isEnglish
+        ? "Could not load accounts."
+        : "Não foi possível carregar as contas.",
+    );
+  }
+
   const typedAccounts = (accounts ?? []) as AccountOption[];
-  const typedCategories = (categories ?? []) as CategoryOption[];
 
   return (
     <main className="mx-auto max-w-3xl space-y-6 lg:space-y-8">
@@ -73,28 +53,23 @@ export default async function NewTransactionPage({params}: PageProps) {
 
         <div className="relative">
           <p className="app-kicker">
-            {isEnglish ? "Transactions" : "Lançamentos"}
+            {isEnglish ? "Credit management" : "Gestão de crédito"}
           </p>
 
           <h1 className="mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] text-white sm:text-4xl">
-            {isEnglish ? "New transaction" : "Novo lançamento"}
+            {isEnglish ? "Add credit card" : "Adicionar cartão"}
           </h1>
 
           <p className="mt-3 text-sm leading-6 text-slate-300 sm:text-base">
             {isEnglish
-              ? "Create a new income, expense, or transfer."
-              : "Crie uma nova receita, despesa ou transferência."}
+              ? "Register a new card and link the account that will pay its statements."
+              : "Cadastre um novo cartão e vincule a conta que pagará as faturas."}
           </p>
         </div>
       </section>
 
       <section className="app-surface rounded-[1.7rem] p-5 sm:p-6">
-        <TransactionForm
-          locale={locale}
-          cards={typedCards}
-          accounts={typedAccounts}
-          categories={typedCategories}
-        />
+        <CreditCardForm locale={locale} accounts={typedAccounts} />
       </section>
     </main>
   );

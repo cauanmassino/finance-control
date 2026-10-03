@@ -28,4 +28,66 @@
     "cardsTitle": "Cartões e parcelas",
     "cardsDescription": "Controle compras parceladas e compromissos futuros."
   }
+  
+}
+
+{
+  "cards": {
+    "new": {
+      "kicker": "Gestão de crédito",
+      "title": "Adicionar cartão",
+      "description": "Cadastre um novo cartão para acompanhar limite, dia de fechamento, vencimento e compras."
+    },
+    "cardDetails": {
+      "title": "Dados do cartão",
+      "name": {
+        "label": "Nome do cartão",
+        "placeholder": "ex. Nubank Gold"
+      },
+      "institution": {
+        "label": "Instituição",
+        "placeholder": "ex. Nubank"
+      },
+      "brand": {
+        "label": "Bandeira",
+        "options": {
+          "none": "Selecione"
+        }
+      },
+      "lastFour": {
+        "label": "Últimos 4 dígitos"
+      },
+      "creditLimit": {
+        "label": "Limite de crédito",
+        "placeholder": "ex. 5000"
+      }
+    },
+    "billing": {
+      "title": "Cobrança",
+      "closingDay": {
+        "label": "Dia de fechamento"
+      },
+      "dueDay": {
+        "label": "Dia de vencimento"
+      },
+      "paymentAccount": {
+        "label": "Conta para pagamento da fatura"
+      }
+    },
+    "appearance": {
+      "title": "Aparência",
+      "color": {
+        "label": "Cor"
+      }
+    },
+    "actions": {
+      "creating": "Criando...",
+      "create": "Criar cartão"
+    }
+  },
+  "accounts": {
+    "paymentAccountSelect": {
+      "none": "Nenhuma conta padrão"
+    }
+  }
 }
