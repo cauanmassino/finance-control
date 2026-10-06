@@ -302,3 +302,18 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+select {
+  color-scheme: dark;
+}
+
+select option,
+select optgroup {
+  background-color: #020617;
+  color: #f8fafc;
+}
+
+select option:checked {
+  background-color: #2563eb;
+  color: #ffffff;
+}

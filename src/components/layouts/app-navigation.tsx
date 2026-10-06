@@ -1,28 +1,28 @@
-"use client";
+"use client"
 
-import Image from "next/image";
-import Link from "next/link";
-import {useEffect, useId, useRef, useState} from "react";
-import {usePathname} from "next/navigation";
+import Image from "next/image"
+import Link from "next/link"
+import { useEffect, useId, useRef, useState } from "react"
+import { usePathname } from "next/navigation"
 
 type AppNavigationProps = {
-  locale: string;
-  isCollapsed: boolean;
-  setIsCollapsed: (value: boolean) => void;
-};
+  locale: string
+  isCollapsed: boolean
+  setIsCollapsed: (value: boolean) => void
+}
 
 type NavigationItem = {
-  href: string;
-  labelPt: string;
-  labelEn: string;
-  icon: string;
-  matches: (pathname: string) => boolean;
-};
+  href: string
+  labelPt: string
+  labelEn: string
+  icon: string
+  matches: (pathname: string) => boolean
+}
 
 type BrandLogoProps = {
-  compact?: boolean;
-  className?: string;
-};
+  compact?: boolean
+  className?: string
+}
 
 function BrandLogo({
   compact = false,
@@ -47,7 +47,7 @@ function BrandLogo({
           className="relative z-10 h-9 w-9 object-contain"
         />
       </span>
-    );
+    )
   }
 
   return (
@@ -73,7 +73,7 @@ function BrandLogo({
         className="relative z-10 h-20 w-auto max-w-[10.5rem] object-contain object-left"
       />
     </span>
-  );
+  )
 }
 
 function MobileBrandLogo() {
@@ -88,7 +88,7 @@ function MobileBrandLogo() {
         className="h-9 w-auto max-w-[8.8rem] object-contain object-left"
       />
     </span>
-  );
+  )
 }
 
 export function AppNavigation({
@@ -96,14 +96,14 @@ export function AppNavigation({
   isCollapsed,
   setIsCollapsed,
 }: AppNavigationProps) {
-  const pathname = usePathname();
-  const isEnglish = locale === "en";
+  const pathname = usePathname()
+  const isEnglish = locale === "en"
 
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
 
-  const mobileMenuId = useId();
-  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
-  const mobileMenuPanelRef = useRef<HTMLElement>(null);
+  const mobileMenuId = useId()
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null)
+  const mobileMenuPanelRef = useRef<HTMLElement>(null)
 
   const navigationItems: NavigationItem[] = [
     {
@@ -163,153 +163,145 @@ export function AppNavigation({
       matches: (path) => path.startsWith(`/${locale}/recurring`),
     },
     {
+      href: `/${locale}/goals`,
+      labelPt: "Metas e objetivos",
+      labelEn: "Goals",
+      icon: "◎",
+      matches: (path) => path.startsWith(`/${locale}/goals`),
+    },
+    {
       href: `/${locale}/reports`,
       labelPt: "Relatórios",
       labelEn: "Reports",
       icon: "⌁",
       matches: (path) => path.startsWith(`/${locale}/reports`),
     },
-  ];
+  ]
 
-  const appPages = navigationItems.some((item) => item.matches(pathname));
+  const appPages = navigationItems.some((item) => item.matches(pathname))
 
   useEffect(() => {
-    setIsMobileMenuOpen(false);
-  }, [pathname]);
+    setIsMobileMenuOpen(false)
+  }, [pathname])
 
   useEffect(() => {
     if (!isMobileMenuOpen) {
-      return;
+      return
     }
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setIsMobileMenuOpen(false);
-        mobileMenuButtonRef.current?.focus();
+        setIsMobileMenuOpen(false)
+        mobileMenuButtonRef.current?.focus()
       }
-    };
+    }
 
-    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("keydown", handleKeyDown)
 
     window.setTimeout(() => {
       const firstFocusableElement =
         mobileMenuPanelRef.current?.querySelector<HTMLElement>(
           'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        );
+        )
 
-      firstFocusableElement?.focus();
-    }, 0);
+      firstFocusableElement?.focus()
+    }, 0)
 
     return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isMobileMenuOpen]);
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [isMobileMenuOpen])
 
   if (!appPages) {
-    return null;
+    return null
   }
 
   const getLabel = (item: NavigationItem) =>
-    isEnglish ? item.labelEn : item.labelPt;
+    isEnglish ? item.labelEn : item.labelPt
 
   const closeMobileMenu = () => {
-    setIsMobileMenuOpen(false);
+    setIsMobileMenuOpen(false)
 
     window.setTimeout(() => {
-      mobileMenuButtonRef.current?.focus();
-    }, 0);
-  };
+      mobileMenuButtonRef.current?.focus()
+    }, 0)
+  }
 
   return (
     <>
-<aside
-  className={`fixed inset-y-0 left-0 z-40 hidden flex-col overflow-hidden border-r border-white/[0.08] bg-[#050918] shadow-[24px_0_70px_rgba(0,0,0,0.28)] transition-[width] duration-300 ease-out lg:flex ${
-    isCollapsed ? "w-20" : "w-[17.5rem]"
-  }`}
->
-  <div
-    aria-hidden="true"
-    className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_4%,rgba(34,211,238,0.11),transparent_24%),radial-gradient(circle_at_90%_26%,rgba(52,211,153,0.08),transparent_25%),linear-gradient(180deg,rgba(15,23,42,0.3),transparent_42%)]"
-  />
-
-  <div
-    className={`relative border-b border-white/[0.08] ${
-      isCollapsed ? "px-3 py-4" : "px-4 py-5"
-    }`}
-  >
-    <Link
-      href={`/${locale}/dashboard`}
-      className={`group flex min-h-14 rounded-2xl transition-opacity hover:opacity-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ${
-        isCollapsed
-          ? "justify-center"
-          : "items-center gap-3 pr-11"
-      }`}
-      title={
-        isCollapsed
-          ? isEnglish
-            ? "Dashboard"
-            : "Visão geral"
-          : undefined
-      }
-    >
-      <BrandLogo compact={isCollapsed} />
-
-      {!isCollapsed && (
-        <span className="min-w-0">
-          <span className="block truncate font-[family-name:var(--font-display)] text-[1.15rem] font-semibold tracking-[-0.06em] text-white">
-            
-          </span>
-
-  
-        </span>
-      )}
-    </Link>
-
-    {isCollapsed ? (
-      <button
-        type="button"
-        onClick={() => setIsCollapsed(false)}
-        aria-label={
-          isEnglish ? "Expand sidebar" : "Expandir menu lateral"
-        }
-        title={isEnglish ? "Expand menu" : "Expandir menu"}
-        className="mx-auto mt-3 flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.1] bg-white/[0.045] text-slate-400 transition hover:border-emerald-300/30 hover:bg-emerald-300/[0.1] hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 hidden flex-col overflow-hidden border-r border-white/[0.08] bg-[#050918] shadow-[24px_0_70px_rgba(0,0,0,0.28)] transition-[width] duration-300 ease-out lg:flex ${
+          isCollapsed ? "w-20" : "w-[17.5rem]"
+        }`}
       >
-        <span
+        <div
           aria-hidden="true"
-          className="text-lg leading-none"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_4%,rgba(34,211,238,0.11),transparent_24%),radial-gradient(circle_at_90%_26%,rgba(52,211,153,0.08),transparent_25%),linear-gradient(180deg,rgba(15,23,42,0.3),transparent_42%)]"
+        />
+
+        <div
+          className={`relative border-b border-white/[0.08] ${
+            isCollapsed ? "px-3 py-4" : "px-4 py-5"
+          }`}
         >
-          ☰
-        </span>
-      </button>
-    ) : (
-      <button
-        type="button"
-        onClick={() => setIsCollapsed(true)}
-        aria-label={
-          isEnglish ? "Collapse sidebar" : "Recolher menu lateral"
-        }
-        title={isEnglish ? "Collapse menu" : "Recolher menu"}
-        className="absolute right-3 top-5 flex h-10 w-10 items-center justify-center rounded-xl border border-transparent text-slate-500 transition hover:border-white/[0.08] hover:bg-white/[0.055] hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
-      >
-        <span
-          aria-hidden="true"
-          className="text-lg leading-none"
-        >
-          ☰
-        </span>
-      </button>
-    )}
-  </div>
+          <Link
+            href={`/${locale}/dashboard`}
+            className={`group flex min-h-14 rounded-2xl transition-opacity hover:opacity-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 ${
+              isCollapsed
+                ? "justify-center"
+                : "items-center gap-3 pr-11"
+            }`}
+            title={
+              isCollapsed
+                ? isEnglish
+                  ? "Dashboard"
+                  : "Visão geral"
+                : undefined
+            }
+          >
+            <BrandLogo compact={isCollapsed} />
+          </Link>
+
+          {isCollapsed ? (
+            <button
+              type="button"
+              onClick={() => setIsCollapsed(false)}
+              aria-label={
+                isEnglish ? "Expand sidebar" : "Expandir menu lateral"
+              }
+              title={isEnglish ? "Expand menu" : "Expandir menu"}
+              className="mx-auto mt-3 flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.1] bg-white/[0.045] text-slate-400 transition hover:border-emerald-300/30 hover:bg-emerald-300/[0.1] hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+            >
+              <span aria-hidden="true" className="text-lg leading-none">
+                ☰
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setIsCollapsed(true)}
+              aria-label={
+                isEnglish ? "Collapse sidebar" : "Recolher menu lateral"
+              }
+              title={isEnglish ? "Collapse menu" : "Recolher menu"}
+              className="absolute right-3 top-5 flex h-10 w-10 items-center justify-center rounded-xl border border-transparent text-slate-500 transition hover:border-white/[0.08] hover:bg-white/[0.055] hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+            >
+              <span aria-hidden="true" className="text-lg leading-none">
+                ☰
+              </span>
+            </button>
+          )}
+        </div>
+
         <nav
           aria-label={isEnglish ? "Main navigation" : "Navegação principal"}
           className="relative flex-1 space-y-1 overflow-y-auto px-3 py-6"
         >
-          {!isCollapsed && (
+          {!isCollapsed ? (
             <div className="mb-4 flex items-center gap-2 px-3">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.95)]" />
 
@@ -317,10 +309,10 @@ export function AppNavigation({
                 {isEnglish ? "Financial workspace" : "Área financeira"}
               </p>
             </div>
-          )}
+          ) : null}
 
           {navigationItems.map((item) => {
-            const isActive = item.matches(pathname);
+            const isActive = item.matches(pathname)
 
             return (
               <Link
@@ -336,9 +328,9 @@ export function AppNavigation({
                     : "text-slate-400 hover:bg-white/[0.055] hover:text-slate-100"
                 }`}
               >
-                {isActive && (
+                {isActive ? (
                   <span className="absolute inset-y-2.5 left-0 w-[3px] rounded-full bg-gradient-to-b from-cyan-300 via-emerald-300 to-emerald-400 shadow-[0_0_16px_rgba(110,231,183,0.95)]" />
-                )}
+                ) : null}
 
                 <span
                   aria-hidden="true"
@@ -351,11 +343,11 @@ export function AppNavigation({
                   {item.icon}
                 </span>
 
-                {!isCollapsed && (
+                {!isCollapsed ? (
                   <span className="truncate">{getLabel(item)}</span>
-                )}
+                ) : null}
               </Link>
-            );
+            )
           })}
         </nav>
 
@@ -460,7 +452,7 @@ export function AppNavigation({
         </div>
       </header>
 
-      {isMobileMenuOpen && (
+      {isMobileMenuOpen ? (
         <div className="fixed inset-0 z-50 lg:hidden">
           <button
             type="button"
@@ -513,7 +505,7 @@ export function AppNavigation({
 
               <div className="space-y-1">
                 {navigationItems.map((item) => {
-                  const isActive = item.matches(pathname);
+                  const isActive = item.matches(pathname)
 
                   return (
                     <Link
@@ -527,9 +519,9 @@ export function AppNavigation({
                           : "text-slate-300 hover:bg-white/[0.055] hover:text-white"
                       }`}
                     >
-                      {isActive && (
+                      {isActive ? (
                         <span className="absolute inset-y-2.5 left-0 w-[3px] rounded-full bg-gradient-to-b from-cyan-300 via-emerald-300 to-emerald-400 shadow-[0_0_16px_rgba(110,231,183,0.95)]" />
-                      )}
+                      ) : null}
 
                       <span
                         aria-hidden="true"
@@ -544,7 +536,7 @@ export function AppNavigation({
 
                       {getLabel(item)}
                     </Link>
-                  );
+                  )
                 })}
               </div>
             </nav>
@@ -571,7 +563,7 @@ export function AppNavigation({
             </div>
           </aside>
         </div>
-      )}
+      ) : null}
     </>
-  );
+  )
 }

@@ -1,70 +1,87 @@
-import type {Metadata} from "next";
-import Link from "next/link";
-import {redirect} from "next/navigation";
-import {createClient} from "@/lib/supabase/server";
-import {TransactionActions} from "@/components/transactions/transaction-actions";
-import {CategoryIcon} from "@/components/categories/category-icon";
+import type { Metadata } from "next"
+import Link from "next/link"
+import { redirect } from "next/navigation"
+import { createClient } from "@/lib/supabase/server"
+import { TransactionActions } from "@/components/transactions/transaction-actions"
+import { CategoryIcon } from "@/components/categories/category-icon"
 
 export const metadata: Metadata = {
   title: "Lançamentos",
   description: "Lista de receitas e despesas.",
-};
+}
 
 type TransactionsPageProps = {
   params: Promise<{
-    locale: string;
-  }>;
+    locale: string
+  }>
   searchParams: Promise<{
-    month?: string;
-    type?: string;
-    account?: string;
-    category?: string;
-  }>;
-};
+    month?: string
+    type?: string
+    status?: string
+    account?: string
+    category?: string
+    credit_card?: string
+  }>
+}
 
-type TransactionType = "income" | "expense";
+type TransactionType = "income" | "expense"
+type TransactionStatus = "paid" | "pending"
 
 type Category = {
-  id: string;
-  name: string;
-  color: string;
-  icon: string | null;
-};
+  id: string
+  name: string
+  color: string
+  icon: string | null
+}
 
 type Account = {
-  id: string;
-  name: string;
-  color: string;
-};
+  id: string
+  name: string
+  color: string
+}
+
+type CreditCard = {
+  id: string
+  name: string
+  institution: string | null
+  brand: string | null
+  last_four: string | null
+}
 
 type Transaction = {
-  id: string;
-  description: string;
-  amount: number;
-  type: TransactionType;
-  occurred_on: string;
-  category: Category | null;
-  account: Account | null;
-};
+  id: string
+  description: string
+  amount: number
+  type: TransactionType
+  occurred_on: string
+  status: TransactionStatus | null
+  payment_method: string | null
+  category: Category | null
+  account: Account | null
+  credit_card: CreditCard | null
+}
 
 type TransactionFromDatabase = {
-  id: string;
-  description: string;
-  amount: number | string;
-  type: TransactionType;
-  occurred_on: string;
-  category: Category[] | Category | null;
-  account: Account[] | Account | null;
-};
+  id: string
+  description: string
+  amount: number | string
+  type: TransactionType
+  occurred_on: string
+  status: TransactionStatus | null
+  payment_method: string | null
+  category: Category[] | Category | null
+  account: Account[] | Account | null
+  credit_card: CreditCard[] | CreditCard | null
+}
 
 function getFirstRelation<T>(
   relation: T[] | T | null | undefined,
 ): T | null {
   if (Array.isArray(relation)) {
-    return relation[0] ?? null;
+    return relation[0] ?? null
   }
 
-  return relation ?? null;
+  return relation ?? null
 }
 
 function formatCurrency(value: number, locale: string) {
@@ -72,7 +89,7 @@ function formatCurrency(value: number, locale: string) {
     style: "currency",
     currency: locale === "en" ? "USD" : "BRL",
     maximumFractionDigits: 2,
-  }).format(value);
+  }).format(value)
 }
 
 function formatDate(date: string, locale: string) {
@@ -80,151 +97,196 @@ function formatDate(date: string, locale: string) {
     day: "2-digit",
     month: "short",
     year: "numeric",
-  }).format(new Date(`${date}T12:00:00`));
+  }).format(new Date(`${date}T12:00:00`))
 }
 
 function formatMonth(month: string, locale: string) {
-  const [yearText, monthText] = month.split("-");
-  const year = Number(yearText);
-  const monthNumber = Number(monthText);
+  const [yearText, monthText] = month.split("-")
+  const year = Number(yearText)
+  const monthNumber = Number(monthText)
 
   if (!year || !monthNumber) {
-    return "";
+    return ""
   }
 
   return new Intl.DateTimeFormat(locale === "en" ? "en-US" : "pt-BR", {
     month: "long",
     year: "numeric",
-  }).format(new Date(year, monthNumber - 1, 1));
+  }).format(new Date(year, monthNumber - 1, 1))
 }
 
 function getDefaultMonth() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, "0")
 
-  return `${year}-${month}`;
+  return `${year}-${month}`
 }
 
 function isValidMonth(value: string | undefined): value is string {
-  return Boolean(value && /^\d{4}-(0[1-9]|1[0-2])$/.test(value));
+  return Boolean(value && /^\d{4}-(0[1-9]|1[0-2])$/.test(value))
 }
 
 function getMonthRange(monthValue: string) {
-  const [yearText, monthText] = monthValue.split("-");
-  const now = new Date();
+  const [yearText, monthText] = monthValue.split("-")
+  const now = new Date()
 
-  const year = Number(yearText ?? now.getFullYear());
-  const month = Number(monthText ?? now.getMonth() + 1);
+  const year = Number(yearText ?? now.getFullYear())
+  const month = Number(monthText ?? now.getMonth() + 1)
 
-  const start = new Date(year, month - 1, 1);
-  const end = new Date(year, month, 1);
+  const start = new Date(year, month - 1, 1)
+  const end = new Date(year, month, 1)
 
   function toDateString(date: Date) {
-    const dateYear = date.getFullYear();
-    const dateMonth = String(date.getMonth() + 1).padStart(2, "0");
-    const dateDay = String(date.getDate()).padStart(2, "0");
+    const dateYear = date.getFullYear()
+    const dateMonth = String(date.getMonth() + 1).padStart(2, "0")
+    const dateDay = String(date.getDate()).padStart(2, "0")
 
-    return `${dateYear}-${dateMonth}-${dateDay}`;
+    return `${dateYear}-${dateMonth}-${dateDay}`
   }
 
   return {
     start: toDateString(start),
     end: toDateString(end),
-  };
+  }
+}
+
+function getCreditCardLabel(card: CreditCard) {
+  const details = [
+    card.institution,
+    card.brand,
+    card.last_four ? `•••• ${card.last_four}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+
+  return details ? `${card.name} — ${details}` : card.name
 }
 
 export default async function TransactionsPage({
   params,
   searchParams,
 }: TransactionsPageProps) {
-  const {locale: receivedLocale} = await params;
-  const locale = receivedLocale === "en" ? "en" : "pt";
+  const { locale: receivedLocale } = await params
+  const locale = receivedLocale === "en" ? "en" : "pt"
 
   const {
     month: requestedMonth,
     type: requestedType,
+    status: requestedStatus,
     account: requestedAccount,
     category: requestedCategory,
-  } = await searchParams;
+    credit_card: requestedCreditCard,
+  } = await searchParams
 
-  const isEnglish = locale === "en";
+  const isEnglish = locale === "en"
 
-  const supabase = await createClient();
+  const supabase = await createClient()
 
   const {
-    data: {user},
-  } = await supabase.auth.getUser();
+    data: { user },
+  } = await supabase.auth.getUser()
 
   if (!user) {
-    redirect(`/${locale}/auth/login`);
+    redirect(`/${locale}/auth/login`)
   }
 
   const selectedMonth = isValidMonth(requestedMonth)
     ? requestedMonth
-    : getDefaultMonth();
+    : getDefaultMonth()
 
   const selectedType: TransactionType | "all" =
     requestedType === "income" || requestedType === "expense"
       ? requestedType
-      : "all";
+      : "all"
 
-  const selectedAccount = requestedAccount ?? "";
-  const selectedCategory = requestedCategory ?? "";
+  const selectedStatus: TransactionStatus | "all" =
+    requestedStatus === "paid" || requestedStatus === "pending"
+      ? requestedStatus
+      : "all"
+
+  const selectedAccount = requestedAccount ?? ""
+  const selectedCategory = requestedCategory ?? ""
+  const selectedCreditCard = requestedCreditCard ?? ""
 
   const exportSearchParams = new URLSearchParams({
     locale,
     month: selectedMonth,
-  });
+  })
 
   if (selectedType !== "all") {
-    exportSearchParams.set("type", selectedType);
+    exportSearchParams.set("type", selectedType)
+  }
+
+  if (selectedStatus !== "all") {
+    exportSearchParams.set("status", selectedStatus)
   }
 
   if (selectedAccount) {
-    exportSearchParams.set("account", selectedAccount);
+    exportSearchParams.set("account", selectedAccount)
   }
 
   if (selectedCategory) {
-    exportSearchParams.set("category", selectedCategory);
+    exportSearchParams.set("category", selectedCategory)
   }
 
-  const exportUrl = `/api/transactions/export?${exportSearchParams.toString()}`;
+  if (selectedCreditCard) {
+    exportSearchParams.set("credit_card", selectedCreditCard)
+  }
 
-  const {start: monthStart, end: nextMonthStart} = getMonthRange(
+  const exportUrl = `/api/transactions/export?${exportSearchParams.toString()}`
+
+  const { start: monthStart, end: nextMonthStart } = getMonthRange(
     selectedMonth,
-  );
+  )
 
   const [
-    {data: accounts, error: accountsError},
-    {data: categories, error: categoriesError},
+    { data: accounts, error: accountsError },
+    { data: categories, error: categoriesError },
+    { data: creditCards, error: creditCardsError },
   ] = await Promise.all([
     supabase
       .from("accounts")
       .select("id, name, color")
       .eq("user_id", user.id)
-      .order("name", {ascending: true}),
+      .order("name", { ascending: true }),
 
     supabase
       .from("categories")
       .select("id, name, color, icon")
       .eq("user_id", user.id)
-      .order("name", {ascending: true}),
-  ]);
+      .order("name", { ascending: true }),
+
+    supabase
+      .from("credit_cards")
+      .select("id, name, institution, brand, last_four")
+      .eq("user_id", user.id)
+      .eq("is_active", true)
+      .order("name", { ascending: true }),
+  ])
 
   if (accountsError) {
-    console.error("Erro ao carregar contas para filtros:", accountsError);
+    console.error("Erro ao carregar contas para filtros:", accountsError)
 
-    throw new Error("Não foi possível carregar as contas.");
+    throw new Error("Não foi possível carregar as contas.")
   }
 
   if (categoriesError) {
     console.error(
       "Erro ao carregar categorias para filtros:",
       categoriesError,
-    );
+    )
 
-    throw new Error("Não foi possível carregar as categorias.");
+    throw new Error("Não foi possível carregar as categorias.")
+  }
+
+  if (creditCardsError) {
+    console.error(
+      "Erro ao carregar cartões para filtros:",
+      creditCardsError,
+    )
+
+    throw new Error("Não foi possível carregar os cartões de crédito.")
   }
 
   let transactionsQuery = supabase
@@ -235,6 +297,8 @@ export default async function TransactionsPage({
       amount,
       type,
       occurred_on,
+      status,
+      payment_method,
       category:categories!transactions_category_id_fkey (
         id,
         name,
@@ -245,42 +309,58 @@ export default async function TransactionsPage({
         id,
         name,
         color
+      ),
+      credit_card:credit_cards!transactions_credit_card_id_fkey (
+        id,
+        name,
+        institution,
+        brand,
+        last_four
       )
     `)
     .eq("user_id", user.id)
     .neq("type", "transfer")
     .gte("occurred_on", monthStart)
     .lt("occurred_on", nextMonthStart)
-    .order("occurred_on", {ascending: false})
-    .order("created_at", {ascending: false});
+    .order("occurred_on", { ascending: false })
+    .order("created_at", { ascending: false })
 
   if (selectedType !== "all") {
-    transactionsQuery = transactionsQuery.eq("type", selectedType);
+    transactionsQuery = transactionsQuery.eq("type", selectedType)
+  }
+
+  if (selectedStatus !== "all") {
+    transactionsQuery = transactionsQuery.eq("status", selectedStatus)
   }
 
   if (selectedAccount) {
-    transactionsQuery = transactionsQuery.eq("account_id", selectedAccount);
+    transactionsQuery = transactionsQuery.eq("account_id", selectedAccount)
   }
 
   if (selectedCategory) {
-    transactionsQuery = transactionsQuery.eq(
-      "category_id",
-      selectedCategory,
-    );
+    transactionsQuery = transactionsQuery.eq("category_id", selectedCategory)
   }
 
-  const {data: transactions, error} = await transactionsQuery;
+  if (selectedCreditCard) {
+    transactionsQuery = transactionsQuery.eq(
+      "credit_card_id",
+      selectedCreditCard,
+    )
+  }
+
+  const { data: transactions, error } = await transactionsQuery
 
   if (error) {
-    console.error("Erro detalhado ao carregar lançamentos:", error);
+    console.error("Erro detalhado ao carregar lançamentos:", error)
 
     throw new Error(
       `Não foi possível carregar os lançamentos: ${error.message}`,
-    );
+    )
   }
 
-  const typedAccounts = (accounts ?? []) as Account[];
-  const typedCategories = (categories ?? []) as Category[];
+  const typedAccounts = (accounts ?? []) as Account[]
+  const typedCategories = (categories ?? []) as Category[]
+  const typedCreditCards = (creditCards ?? []) as CreditCard[]
 
   const typedTransactions: Transaction[] = (
     (transactions ?? []) as TransactionFromDatabase[]
@@ -290,20 +370,23 @@ export default async function TransactionsPage({
     amount: Number(transaction.amount),
     type: transaction.type,
     occurred_on: transaction.occurred_on,
+    status: transaction.status,
+    payment_method: transaction.payment_method,
     category: getFirstRelation(transaction.category),
     account: getFirstRelation(transaction.account),
-  }));
+    credit_card: getFirstRelation(transaction.credit_card),
+  }))
 
   const totalIncome = typedTransactions
     .filter((transaction) => transaction.type === "income")
-    .reduce((total, transaction) => total + transaction.amount, 0);
+    .reduce((total, transaction) => total + transaction.amount, 0)
 
   const totalExpense = typedTransactions
     .filter((transaction) => transaction.type === "expense")
-    .reduce((total, transaction) => total + transaction.amount, 0);
+    .reduce((total, transaction) => total + transaction.amount, 0)
 
-  const netResult = totalIncome - totalExpense;
-  const transactionCount = typedTransactions.length;
+  const netResult = totalIncome - totalExpense
+  const transactionCount = typedTransactions.length
 
   const selectedTypeLabel =
     selectedType === "income"
@@ -316,7 +399,15 @@ export default async function TransactionsPage({
           : "Despesas"
         : isEnglish
           ? "All transactions"
-          : "Todos os lançamentos";
+          : "Todos os lançamentos"
+
+  const hasActiveFilters =
+    Boolean(requestedMonth) ||
+    Boolean(requestedType) ||
+    Boolean(requestedStatus) ||
+    Boolean(requestedAccount) ||
+    Boolean(requestedCategory) ||
+    Boolean(requestedCreditCard)
 
   return (
     <main className="space-y-6 lg:space-y-8">
@@ -370,6 +461,12 @@ export default async function TransactionsPage({
               <span className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-xs font-semibold text-cyan-100">
                 {selectedTypeLabel}
               </span>
+
+              {selectedCreditCard ? (
+                <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1.5 text-xs font-semibold text-amber-100">
+                  {isEnglish ? "Credit card filtered" : "Cartão filtrado"}
+                </span>
+              ) : null}
             </div>
           </div>
 
@@ -413,20 +510,17 @@ export default async function TransactionsPage({
             </h2>
           </div>
 
-          {(requestedMonth ||
-            requestedType ||
-            requestedAccount ||
-            requestedCategory) && (
+          {hasActiveFilters ? (
             <Link
               href={`/${locale}/transactions`}
               className="rounded-xl border border-white/10 bg-white/[0.045] px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/[0.09] hover:text-white"
             >
               {isEnglish ? "Reset filters" : "Limpar filtros"} ×
             </Link>
-          )}
+          ) : null}
         </div>
 
-        <form className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <form className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <label className="space-y-2">
             <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
               {isEnglish ? "Month" : "Mês"}
@@ -450,16 +544,40 @@ export default async function TransactionsPage({
               defaultValue={selectedType}
               className="h-11 w-full rounded-xl border border-white/[0.1] bg-slate-950/45 px-3 text-sm text-slate-100 outline-none transition hover:border-white/[0.16] focus:border-emerald-300/55 focus:ring-2 focus:ring-emerald-300/10"
             >
-              <option value="all">
+              <option className="bg-slate-950 text-white" value="all">
                 {isEnglish ? "All types" : "Todos os tipos"}
               </option>
 
-              <option value="income">
+              <option className="bg-slate-950 text-white" value="income">
                 {isEnglish ? "Income" : "Receitas"}
               </option>
 
-              <option value="expense">
+              <option className="bg-slate-950 text-white" value="expense">
                 {isEnglish ? "Expenses" : "Despesas"}
+              </option>
+            </select>
+          </label>
+
+          <label className="space-y-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+              {isEnglish ? "Status" : "Status"}
+            </span>
+
+            <select
+              name="status"
+              defaultValue={selectedStatus}
+              className="h-11 w-full rounded-xl border border-white/[0.1] bg-slate-950/45 px-3 text-sm text-slate-100 outline-none transition hover:border-white/[0.16] focus:border-emerald-300/55 focus:ring-2 focus:ring-emerald-300/10"
+            >
+              <option className="bg-slate-950 text-white" value="all">
+                {isEnglish ? "All statuses" : "Todos os status"}
+              </option>
+
+              <option className="bg-slate-950 text-white" value="paid">
+                {isEnglish ? "Paid" : "Pago"}
+              </option>
+
+              <option className="bg-slate-950 text-white" value="pending">
+                {isEnglish ? "Pending" : "Pendente"}
               </option>
             </select>
           </label>
@@ -474,12 +592,16 @@ export default async function TransactionsPage({
               defaultValue={selectedAccount}
               className="h-11 w-full rounded-xl border border-white/[0.1] bg-slate-950/45 px-3 text-sm text-slate-100 outline-none transition hover:border-white/[0.16] focus:border-emerald-300/55 focus:ring-2 focus:ring-emerald-300/10"
             >
-              <option value="">
+              <option className="bg-slate-950 text-white" value="">
                 {isEnglish ? "All accounts" : "Todas as contas"}
               </option>
 
               {typedAccounts.map((account) => (
-                <option key={account.id} value={account.id}>
+                <option
+                  className="bg-slate-950 text-white"
+                  key={account.id}
+                  value={account.id}
+                >
                   {account.name}
                 </option>
               ))}
@@ -496,25 +618,57 @@ export default async function TransactionsPage({
               defaultValue={selectedCategory}
               className="h-11 w-full rounded-xl border border-white/[0.1] bg-slate-950/45 px-3 text-sm text-slate-100 outline-none transition hover:border-white/[0.16] focus:border-emerald-300/55 focus:ring-2 focus:ring-emerald-300/10"
             >
-              <option value="">
+              <option className="bg-slate-950 text-white" value="">
                 {isEnglish ? "All categories" : "Todas as categorias"}
               </option>
 
               {typedCategories.map((category) => (
-                <option key={category.id} value={category.id}>
+                <option
+                  className="bg-slate-950 text-white"
+                  key={category.id}
+                  value={category.id}
+                >
                   {category.name}
                 </option>
               ))}
             </select>
           </label>
 
-          <div className="flex items-end gap-2">
+          <label className="space-y-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+              {isEnglish ? "Credit card used" : "Cartão usado"}
+            </span>
+
+            <select
+              name="credit_card"
+              defaultValue={selectedCreditCard}
+              className="h-11 w-full rounded-xl border border-white/[0.1] bg-slate-950/45 px-3 text-sm text-slate-100 outline-none transition hover:border-white/[0.16] focus:border-emerald-300/55 focus:ring-2 focus:ring-emerald-300/10"
+            >
+              <option className="bg-slate-950 text-white" value="">
+                {isEnglish
+                  ? "All credit cards"
+                  : "Todos os cartões"}
+              </option>
+
+              {typedCreditCards.map((card) => (
+                <option
+                  className="bg-slate-950 text-white"
+                  key={card.id}
+                  value={card.id}
+                >
+                  {getCreditCardLabel(card)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-3 xl:col-span-6">
             <button
               type="submit"
               className="inline-flex h-11 flex-1 items-center justify-center rounded-xl bg-emerald-300 px-4 text-sm font-bold text-emerald-950 shadow-[0_10px_22px_rgba(16,185,129,0.16)] transition hover:bg-emerald-200"
             >
               <span className="mr-1.5">⌕</span>
-              {isEnglish ? "Apply" : "Aplicar"}
+              {isEnglish ? "Apply filters" : "Aplicar filtros"}
             </button>
 
             <Link
@@ -671,11 +825,15 @@ export default async function TransactionsPage({
         ) : (
           <div className="divide-y divide-white/[0.07]">
             {typedTransactions.map((transaction) => {
-              const isIncome = transaction.type === "income";
+              const isIncome = transaction.type === "income"
 
               const categoryColor =
                 transaction.category?.color ??
-                (isIncome ? "#6ee7b7" : "#fda4af");
+                (isIncome ? "#6ee7b7" : "#fda4af")
+
+              const isCreditCardPurchase =
+                transaction.payment_method === "credit_card" ||
+                Boolean(transaction.credit_card)
 
               return (
                 <article
@@ -717,7 +875,7 @@ export default async function TransactionsPage({
                         <span className="inline-flex items-center gap-1.5">
                           <span
                             className="h-1.5 w-1.5 rounded-full"
-                            style={{backgroundColor: categoryColor}}
+                            style={{ backgroundColor: categoryColor }}
                           />
 
                           {transaction.category?.name ??
@@ -731,10 +889,17 @@ export default async function TransactionsPage({
                           ·
                         </span>
 
-                        <span>
-                          {transaction.account?.name ??
-                            (isEnglish ? "No account" : "Sem conta")}
-                        </span>
+                        {isCreditCardPurchase && transaction.credit_card ? (
+                          <span className="inline-flex items-center gap-1.5 text-amber-200">
+                            <span aria-hidden="true">▤</span>
+                            {getCreditCardLabel(transaction.credit_card)}
+                          </span>
+                        ) : (
+                          <span>
+                            {transaction.account?.name ??
+                              (isEnglish ? "No account" : "Sem conta")}
+                          </span>
+                        )}
 
                         <span
                           aria-hidden="true"
@@ -746,6 +911,21 @@ export default async function TransactionsPage({
                         <span>
                           {formatDate(transaction.occurred_on, locale)}
                         </span>
+
+                        {transaction.status === "pending" ? (
+                          <>
+                            <span
+                              aria-hidden="true"
+                              className="text-slate-600"
+                            >
+                              ·
+                            </span>
+
+                            <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-2 py-0.5 text-[10px] font-bold text-amber-200">
+                              {isEnglish ? "Pending" : "Pendente"}
+                            </span>
+                          </>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -768,11 +948,11 @@ export default async function TransactionsPage({
                     </div>
                   </div>
                 </article>
-              );
+              )
             })}
           </div>
         )}
       </section>
     </main>
-  );
+  )
 }

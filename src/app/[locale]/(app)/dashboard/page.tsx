@@ -1,126 +1,208 @@
-import Link from "next/link";
-import {redirect} from "next/navigation";
-import {createClient} from "@/lib/supabase/server";
-import {CashFlowChart} from "@/components/dashboard/cash-flow-chart";
-import {CategorySpendingChart} from "@/components/dashboard/category-spending-chart";
-import {AccountDistributionChart} from "@/components/dashboard/account-distribution-chart";
-import {CategoryIcon} from "@/components/categories/category-icon";
-import {GoalsSummary} from "@/components/dashboard/goals-summary";
-import {AlertsSummary} from "@/components/dashboard/alerts-summary";
+import Link from "next/link"
+import { redirect } from "next/navigation"
+import { createClient } from "@/lib/supabase/server"
+import { CashFlowChart } from "@/components/dashboard/cash-flow-chart"
+import { CategorySpendingChart } from "@/components/dashboard/category-spending-chart"
+import { AccountDistributionChart } from "@/components/dashboard/account-distribution-chart"
+import { CategoryIcon } from "@/components/categories/category-icon"
+import { AlertsSummary } from "@/components/dashboard/alerts-summary"
 
 type PageProps = {
   params: Promise<{
-    locale: string;
-  }>;
-};
+    locale: string
+  }>
+  searchParams: Promise<{
+    from?: string
+    to?: string
+  }>
+}
 
 type Account = {
-  id: string;
-  name: string;
-  color: string | null;
-};
+  id: string
+  name: string
+  color: string | null
+}
 
 type Category = {
-  id: string;
-  name: string;
-  color: string | null;
-  icon: string | null;
-};
+  id: string
+  name: string
+  color: string | null
+  icon: string | null
+}
 
 type RecentTransaction = {
-  id: string;
-  description: string;
-  amount: number | string;
-  type: "income" | "expense";
-  occurred_on: string;
-  account: Account[] | Account | null;
-  category: Category[] | Category | null;
-};
+  id: string
+  description: string
+  amount: number | string
+  type: "income" | "expense"
+  occurred_on: string
+  account: Account[] | Account | null
+  category: Category[] | Category | null
+}
 
 type RecurringTransaction = {
-  id: string;
-  description: string;
-  amount: number | string;
-  type: "income" | "expense";
-  next_occurrence: string | null;
-};
+  id: string
+  description: string
+  amount: number | string
+  type: "income" | "expense"
+  next_occurrence: string | null
+}
 
 type AccountBalance = Account & {
-  balance: number;
-  share: number;
-};
+  balance: number
+  share: number
+}
 
 type CashFlowItem = {
-  occurred_on: string;
-  amount: number | string;
-  type: "income" | "expense";
-};
+  occurred_on: string
+  amount: number | string
+  type: "income" | "expense"
+}
 
 type CategoryExpenseItem = {
-  amount: number | string;
-  category: Category[] | Category | null;
-};
+  amount: number | string
+  category: Category[] | Category | null
+}
 
 type CategorySpending = {
-  id: string;
-  name: string;
-  color: string | null;
-  icon: string | null;
-  amount: number;
-  percentage: number;
-};
+  id: string
+  name: string
+  color: string | null
+  icon: string | null
+  amount: number
+  percentage: number
+}
 
 type CashFlowPoint = {
-  label: string;
-  income: number;
-  expense: number;
-  result: number;
-};
+  label: string
+  income: number
+  expense: number
+  result: number
+}
 
 type BudgetFromDatabase = {
-  id: string;
-  amount: number | string;
-  category: Category[] | Category | null;
-};
+  id: string
+  amount: number | string
+  category: Category[] | Category | null
+}
 
 type BudgetSummaryItem = {
-  id: string;
-  amount: number;
-  spent: number;
-  percentage: number;
-  category: Category;
-};
+  id: string
+  amount: number
+  spent: number
+  percentage: number
+  category: Category
+}
 
 type CreditCardStatement = {
-  id: string;
-  credit_card_id: string;
-  total_amount: number | string;
-  paid_amount: number | string;
-  status: "open" | "closed" | "overdue" | "paid";
-};
+  id: string
+  credit_card_id: string
+  total_amount: number | string
+  paid_amount: number | string
+  status: "open" | "closed" | "overdue" | "paid"
+}
 
 type CreditCardTransaction = {
-  id: string;
-  amount: number | string;
-  credit_card_statement_id: string | null;
-};
+  id: string
+  amount: number | string
+  credit_card_statement_id: string | null
+}
 
 function getFirstRelation<T>(
   relation: T[] | T | null | undefined,
 ): T | null {
   if (Array.isArray(relation)) {
-    return relation[0] ?? null;
+    return relation[0] ?? null
   }
 
-  return relation ?? null;
+  return relation ?? null
 }
 
 function toDateString(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
 
-  return `${year}-${month}-${day}`;
+  return `${year}-${month}-${day}`
+}
+
+function isValidDateString(value: string | undefined) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false
+  }
+
+  const date = new Date(`${value}T12:00:00`)
+
+  return !Number.isNaN(date.getTime())
+}
+
+function getDefaultPeriod() {
+  const now = new Date()
+
+  const start = new Date(now.getFullYear(), now.getMonth(), 1)
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+
+  return {
+    from: toDateString(start),
+    to: toDateString(end),
+  }
+}
+
+function getSelectedPeriod(
+  fromValue: string | undefined,
+  toValue: string | undefined,
+) {
+  const defaultPeriod = getDefaultPeriod()
+
+  const from = isValidDateString(fromValue)
+    ? fromValue
+    : defaultPeriod.from
+
+  const to = isValidDateString(toValue)
+    ? toValue
+    : defaultPeriod.to
+
+  if (from! <= to!) {
+    return {
+      from: from!,
+      to: to!,
+    }
+  }
+
+  return {
+    from: to!,
+    to: from!,
+  }
+}
+
+function getExclusiveEndDate(dateString: string) {
+  const date = new Date(`${dateString}T12:00:00`)
+  date.setDate(date.getDate() + 1)
+
+  return toDateString(date)
+}
+
+function getPreviousMonthPeriod() {
+  const now = new Date()
+
+  const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+  const end = new Date(now.getFullYear(), now.getMonth(), 0)
+
+  return {
+    from: toDateString(start),
+    to: toDateString(end),
+  }
+}
+
+function getLastThirtyDaysPeriod() {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(start.getDate() - 29)
+
+  return {
+    from: toDateString(start),
+    to: toDateString(end),
+  }
 }
 
 function formatCurrency(value: number, locale: string) {
@@ -128,27 +210,36 @@ function formatCurrency(value: number, locale: string) {
     style: "currency",
     currency: locale === "en" ? "USD" : "BRL",
     maximumFractionDigits: 2,
-  }).format(value);
+  }).format(value)
 }
 
 function formatDate(value: string, locale: string) {
   return new Intl.DateTimeFormat(locale === "en" ? "en-US" : "pt-BR", {
     day: "2-digit",
     month: "short",
-  }).format(new Date(`${value}T12:00:00`));
+  }).format(new Date(`${value}T12:00:00`))
 }
 
-function getMonthLabel(locale: string) {
-  return new Intl.DateTimeFormat(locale === "en" ? "en-US" : "pt-BR", {
-    month: "long",
-    year: "numeric",
-  }).format(new Date());
+function formatPeriodLabel(from: string, to: string, locale: string) {
+  const formatter = new Intl.DateTimeFormat(
+    locale === "en" ? "en-US" : "pt-BR",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    },
+  )
+
+  const fromLabel = formatter.format(new Date(`${from}T12:00:00`))
+  const toLabel = formatter.format(new Date(`${to}T12:00:00`))
+
+  return `${fromLabel} – ${toLabel}`
 }
 
 function getMonthKey(date: Date) {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0")
 
-  return `${date.getFullYear()}-${month}`;
+  return `${date.getFullYear()}-${month}`
 }
 
 function getMonthShortLabel(date: Date, locale: string) {
@@ -157,102 +248,107 @@ function getMonthShortLabel(date: Date, locale: string) {
     {
       month: "short",
     },
-  ).format(date);
+  ).format(date)
 
-  return label.replace(".", "").slice(0, 3);
+  return label.replace(".", "").slice(0, 3)
 }
 
-function getLastMonths(count: number, locale: string) {
-  const now = new Date();
+function getMonthsInPeriod(from: string, to: string, locale: string) {
+  const start = new Date(`${from}T12:00:00`)
+  const end = new Date(`${to}T12:00:00`)
 
-  return Array.from({length: count}, (_, index) => {
-    const date = new Date(
-      now.getFullYear(),
-      now.getMonth() - (count - 1 - index),
-      1,
-    );
+  const startMonth = new Date(start.getFullYear(), start.getMonth(), 1)
+  const endMonth = new Date(end.getFullYear(), end.getMonth(), 1)
 
-    return {
-      key: getMonthKey(date),
-      label: getMonthShortLabel(date, locale),
-    };
-  });
+  const months: Array<{
+    key: string
+    label: string
+  }> = []
+
+  let cursor = startMonth
+
+  while (cursor <= endMonth) {
+    months.push({
+      key: getMonthKey(cursor),
+      label: getMonthShortLabel(cursor, locale),
+    })
+
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)
+  }
+
+  return months
 }
 
 export default async function DashboardPage({
   params,
+  searchParams,
 }: PageProps) {
-  const {locale: receivedLocale} = await params;
-  const locale = receivedLocale === "en" ? "en" : "pt";
-  const isEnglish = locale === "en";
+  const { locale: receivedLocale } = await params
+  const query = await searchParams
 
-  const supabase = await createClient();
+  const locale = receivedLocale === "en" ? "en" : "pt"
+  const isEnglish = locale === "en"
+
+  const { from, to } = getSelectedPeriod(query.from, query.to)
+  const periodEndExclusive = getExclusiveEndDate(to)
+  const periodLabel = formatPeriodLabel(from, to, locale)
+
+  const defaultPeriod = getDefaultPeriod()
+  const previousMonthPeriod = getPreviousMonthPeriod()
+  const lastThirtyDaysPeriod = getLastThirtyDaysPeriod()
+
+  const budgetMonth = `${from.slice(0, 7)}-01`
+  const periodCrossesMonths = from.slice(0, 7) !== to.slice(0, 7)
+
+  const supabase = await createClient()
 
   const {
-    data: {user},
-  } = await supabase.auth.getUser();
+    data: { user },
+  } = await supabase.auth.getUser()
 
   if (!user) {
-    redirect(`/${locale}/auth/login`);
+    redirect(`/${locale}/auth/login`)
   }
 
-  const {data: profile, error: profileError} = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("onboarding_completed")
     .eq("id", user.id)
-    .maybeSingle();
+    .maybeSingle()
 
   if (profileError) {
-    console.error("Erro ao carregar perfil do dashboard:", profileError);
+    console.error("Erro ao carregar perfil do dashboard:", profileError)
   }
 
   if (!profile?.onboarding_completed) {
-    redirect(`/${locale}/onboarding`);
+    redirect(`/${locale}/onboarding`)
   }
 
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const nextMonthStart = new Date(
-    now.getFullYear(),
-    now.getMonth() + 1,
-    1,
-  );
-
-  const sixMonthsStart = new Date(
-    now.getFullYear(),
-    now.getMonth() - 5,
-    1,
-  );
-
-  const monthStartText = toDateString(monthStart);
-  const nextMonthStartText = toDateString(nextMonthStart);
-  const sixMonthsStartText = toDateString(sixMonthsStart);
-
   const [
-    {data: accounts, error: accountsError},
-    {data: monthTransactions, error: monthTransactionsError},
-    {data: allTransactions, error: allTransactionsError},
-    {data: recentData, error: recentError},
-    {data: recurringData, error: recurringError},
-    {data: cashFlowData, error: cashFlowError},
-    {data: categoryExpenseData, error: categoryExpenseError},
-    {data: budgetsData, error: budgetsError},
-    {data: creditCardStatements, error: creditCardStatementsError},
-    {data: creditCardTransactions, error: creditCardTransactionsError},
+    { data: accounts, error: accountsError },
+    { data: periodTransactions, error: periodTransactionsError },
+    { data: allTransactions, error: allTransactionsError },
+    { data: recentData, error: recentError },
+    { data: recurringData, error: recurringError },
+    { data: cashFlowData, error: cashFlowError },
+    { data: categoryExpenseData, error: categoryExpenseError },
+    { data: budgetsData, error: budgetsError },
+    { data: creditCardStatements, error: creditCardStatementsError },
+    { data: creditCardTransactions, error: creditCardTransactionsError },
   ] = await Promise.all([
     supabase
       .from("accounts")
       .select("id, name, color")
       .eq("user_id", user.id)
-      .order("name", {ascending: true}),
+      .order("name", { ascending: true }),
 
     supabase
       .from("transactions")
       .select("type, amount")
       .eq("user_id", user.id)
       .neq("type", "transfer")
-      .gte("occurred_on", monthStartText)
-      .lt("occurred_on", nextMonthStartText),
+      .gte("occurred_on", from)
+      .lt("occurred_on", periodEndExclusive),
 
     supabase
       .from("transactions")
@@ -281,8 +377,10 @@ export default async function DashboardPage({
       `)
       .eq("user_id", user.id)
       .neq("type", "transfer")
-      .order("occurred_on", {ascending: false})
-      .order("created_at", {ascending: false})
+      .gte("occurred_on", from)
+      .lt("occurred_on", periodEndExclusive)
+      .order("occurred_on", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(6),
 
     supabase
@@ -290,7 +388,7 @@ export default async function DashboardPage({
       .select("id, description, amount, type, next_occurrence")
       .eq("user_id", user.id)
       .eq("is_active", true)
-      .order("next_occurrence", {ascending: true})
+      .order("next_occurrence", { ascending: true })
       .limit(4),
 
     supabase
@@ -298,8 +396,8 @@ export default async function DashboardPage({
       .select("occurred_on, amount, type")
       .eq("user_id", user.id)
       .neq("type", "transfer")
-      .gte("occurred_on", sixMonthsStartText)
-      .lt("occurred_on", nextMonthStartText),
+      .gte("occurred_on", from)
+      .lt("occurred_on", periodEndExclusive),
 
     supabase
       .from("transactions")
@@ -314,8 +412,8 @@ export default async function DashboardPage({
       `)
       .eq("user_id", user.id)
       .eq("type", "expense")
-      .gte("occurred_on", monthStartText)
-      .lt("occurred_on", nextMonthStartText),
+      .gte("occurred_on", from)
+      .lt("occurred_on", periodEndExclusive),
 
     supabase
       .from("budgets")
@@ -330,7 +428,7 @@ export default async function DashboardPage({
         )
       `)
       .eq("user_id", user.id)
-      .eq("month", monthStartText),
+      .eq("month", budgetMonth),
 
     supabase
       .from("credit_card_statements")
@@ -338,11 +436,6 @@ export default async function DashboardPage({
       .eq("user_id", user.id)
       .in("status", ["open", "closed", "overdue"]),
 
-    /*
-     * Esta consulta garante que transações de cartão recém-criadas
-     * também sejam consideradas, mesmo se uma fatura ainda não tiver
-     * sido recalculada por algum motivo.
-     */
     supabase
       .from("transactions")
       .select("id, amount, credit_card_statement_id")
@@ -350,11 +443,11 @@ export default async function DashboardPage({
       .eq("type", "expense")
       .eq("payment_method", "credit_card")
       .not("credit_card_id", "is", null),
-  ]);
+  ])
 
   const loadError =
     accountsError ??
-    monthTransactionsError ??
+    periodTransactionsError ??
     allTransactionsError ??
     recentError ??
     recurringError ??
@@ -362,7 +455,7 @@ export default async function DashboardPage({
     categoryExpenseError ??
     budgetsError ??
     creditCardStatementsError ??
-    creditCardTransactionsError;
+    creditCardTransactionsError
 
   if (loadError) {
     console.error("Erro ao carregar dashboard:", {
@@ -370,102 +463,94 @@ export default async function DashboardPage({
       message: loadError.message,
       details: loadError.details,
       hint: loadError.hint,
-    });
+    })
   }
 
-  const typedAccounts = (accounts ?? []) as Account[];
+  const typedAccounts = (accounts ?? []) as Account[]
+
   const typedCreditCardStatements =
-    (creditCardStatements ?? []) as CreditCardStatement[];
+    (creditCardStatements ?? []) as CreditCardStatement[]
 
   const typedCreditCardTransactions =
-    (creditCardTransactions ?? []) as CreditCardTransaction[];
+    (creditCardTransactions ?? []) as CreditCardTransaction[]
 
-  const income = (monthTransactions ?? [])
+  const income = (periodTransactions ?? [])
     .filter((transaction) => transaction.type === "income")
-    .reduce((total, transaction) => total + Number(transaction.amount), 0);
+    .reduce((total, transaction) => total + Number(transaction.amount), 0)
 
-  const expenses = (monthTransactions ?? [])
+  const expenses = (periodTransactions ?? [])
     .filter((transaction) => transaction.type === "expense")
-    .reduce((total, transaction) => total + Number(transaction.amount), 0);
+    .reduce((total, transaction) => total + Number(transaction.amount), 0)
 
-  const monthResult = income - expenses;
+  const periodResult = income - expenses
 
+  /*
+   * Saldo de conta e patrimônio são posição ATUAL:
+   * não mudam quando o usuário altera o intervalo de movimentações.
+   */
   const accountBalances: AccountBalance[] = typedAccounts.map((account) => {
     const balance = (allTransactions ?? []).reduce(
       (total, transaction) => {
-        const amount = Number(transaction.amount);
+        const amount = Number(transaction.amount)
 
         if (transaction.type === "income") {
           return transaction.account_id === account.id
             ? total + amount
-            : total;
+            : total
         }
 
         if (transaction.type === "expense") {
           return transaction.account_id === account.id
             ? total - amount
-            : total;
+            : total
         }
 
         if (transaction.type === "transfer") {
           if (transaction.account_id === account.id) {
-            return total - amount;
+            return total - amount
           }
 
           if (transaction.transfer_account_id === account.id) {
-            return total + amount;
+            return total + amount
           }
         }
 
-        return total;
+        return total
       },
       0,
-    );
+    )
 
     return {
       ...account,
       balance,
       share: 0,
-    };
-  });
+    }
+  })
 
   const totalBalance = accountBalances.reduce(
     (total, account) => total + account.balance,
     0,
-  );
+  )
 
-  /*
-   * DÍVIDA OFICIAL:
-   * Cada fatura pendente contribui com seu total menos pagamentos.
-   */
   const statementDebt = typedCreditCardStatements.reduce(
     (total, statement) => {
-      const statementTotal = Number(statement.total_amount ?? 0);
-      const paidAmount = Number(statement.paid_amount ?? 0);
+      const statementTotal = Number(statement.total_amount ?? 0)
+      const paidAmount = Number(statement.paid_amount ?? 0)
 
-      return total + Math.max(statementTotal - paidAmount, 0);
+      return total + Math.max(statementTotal - paidAmount, 0)
     },
     0,
-  );
+  )
 
-  /*
-   * PROTEÇÃO PARA COMPRAS SEM FATURA:
-   * Caso uma transação de cartão esteja sem credit_card_statement_id,
-   * ela não pode ficar fora do patrimônio.
-   *
-   * Transações que já estão ligadas à fatura não são somadas novamente,
-   * evitando desconto duplicado.
-   */
   const unlinkedCreditCardDebt = typedCreditCardTransactions
     .filter((transaction) => !transaction.credit_card_statement_id)
     .reduce(
       (total, transaction) => total + Number(transaction.amount),
       0,
-    );
+    )
 
-  const totalCreditCardDebt = statementDebt + unlinkedCreditCardDebt;
-
-  const netWorth = totalBalance - totalCreditCardDebt;
+  const totalCreditCardDebt = statementDebt + unlinkedCreditCardDebt
+  const netWorth = totalBalance - totalCreditCardDebt
 
   const accountBalancesWithShare = accountBalances.map((account) => ({
     ...account,
@@ -473,71 +558,71 @@ export default async function DashboardPage({
       totalBalance > 0
         ? Math.max((account.balance / totalBalance) * 100, 0)
         : 0,
-  }));
+  }))
 
-  const lastMonths = getLastMonths(6, locale);
+  const periodMonths = getMonthsInPeriod(from, to, locale)
 
   const cashFlowMap = new Map<
     string,
     {
-      income: number;
-      expense: number;
+      income: number
+      expense: number
     }
-  >();
+  >()
 
-  lastMonths.forEach((month) => {
+  periodMonths.forEach((month) => {
     cashFlowMap.set(month.key, {
       income: 0,
       expense: 0,
-    });
-  });
+    })
+  })
 
-  ((cashFlowData ?? []) as CashFlowItem[]).forEach((transaction) => {
-    const monthKey = transaction.occurred_on.slice(0, 7);
-    const month = cashFlowMap.get(monthKey);
+  ;((cashFlowData ?? []) as CashFlowItem[]).forEach((transaction) => {
+    const monthKey = transaction.occurred_on.slice(0, 7)
+    const month = cashFlowMap.get(monthKey)
 
     if (!month) {
-      return;
+      return
     }
 
     if (transaction.type === "income") {
-      month.income += Number(transaction.amount);
+      month.income += Number(transaction.amount)
     }
 
     if (transaction.type === "expense") {
-      month.expense += Number(transaction.amount);
+      month.expense += Number(transaction.amount)
     }
-  });
+  })
 
-  const cashFlowPoints: CashFlowPoint[] = lastMonths.map((month) => {
+  const cashFlowPoints: CashFlowPoint[] = periodMonths.map((month) => {
     const values = cashFlowMap.get(month.key) ?? {
       income: 0,
       expense: 0,
-    };
+    }
 
     return {
       label: month.label,
       income: values.income,
       expense: values.expense,
       result: values.income - values.expense,
-    };
-  });
+    }
+  })
 
   const categoryMap = new Map<
     string,
     {
-      id: string;
-      name: string;
-      color: string | null;
-      icon: string | null;
-      amount: number;
+      id: string
+      name: string
+      color: string | null
+      icon: string | null
+      amount: number
     }
-  >();
+  >()
 
-  ((categoryExpenseData ?? []) as unknown as CategoryExpenseItem[]).forEach(
+  ;((categoryExpenseData ?? []) as unknown as CategoryExpenseItem[]).forEach(
     (transaction) => {
-      const category = getFirstRelation(transaction.category);
-      const categoryId = category?.id ?? "uncategorized";
+      const category = getFirstRelation(transaction.category)
+      const categoryId = category?.id ?? "uncategorized"
 
       const existing = categoryMap.get(categoryId) ?? {
         id: categoryId,
@@ -545,12 +630,12 @@ export default async function DashboardPage({
         color: category?.color ?? "#fb7185",
         icon: category?.icon ?? null,
         amount: 0,
-      };
+      }
 
-      existing.amount += Number(transaction.amount);
-      categoryMap.set(categoryId, existing);
+      existing.amount += Number(transaction.amount)
+      categoryMap.set(categoryId, existing)
     },
-  );
+  )
 
   const categorySpending: CategorySpending[] = Array.from(categoryMap.values())
     .sort((first, second) => second.amount - first.amount)
@@ -559,26 +644,26 @@ export default async function DashboardPage({
       ...category,
       percentage:
         expenses > 0 ? Math.min((category.amount / expenses) * 100, 100) : 0,
-    }));
+    }))
 
-  const spentByCategory = new Map<string, number>();
+  const spentByCategory = new Map<string, number>()
 
   categoryMap.forEach((category) => {
-    spentByCategory.set(category.id, category.amount);
-  });
+    spentByCategory.set(category.id, category.amount)
+  })
 
   const budgetSummaryItems: BudgetSummaryItem[] = (
     (budgetsData ?? []) as unknown as BudgetFromDatabase[]
   )
     .map((budget) => {
-      const category = getFirstRelation(budget.category);
+      const category = getFirstRelation(budget.category)
 
       if (!category) {
-        return null;
+        return null
       }
 
-      const amount = Number(budget.amount);
-      const spent = spentByCategory.get(category.id) ?? 0;
+      const amount = Number(budget.amount)
+      const spent = spentByCategory.get(category.id) ?? 0
 
       return {
         id: budget.id,
@@ -586,53 +671,53 @@ export default async function DashboardPage({
         spent,
         percentage: amount > 0 ? (spent / amount) * 100 : 0,
         category,
-      };
+      }
     })
     .filter((budget): budget is BudgetSummaryItem => budget !== null)
-    .sort((first, second) => second.percentage - first.percentage);
+    .sort((first, second) => second.percentage - first.percentage)
 
   const totalBudget = budgetSummaryItems.reduce(
     (total, budget) => total + budget.amount,
     0,
-  );
+  )
 
   const totalBudgetSpent = budgetSummaryItems.reduce(
     (total, budget) => total + budget.spent,
     0,
-  );
+  )
 
-  const totalBudgetRemaining = totalBudget - totalBudgetSpent;
+  const totalBudgetRemaining = totalBudget - totalBudgetSpent
 
   const budgetUsagePercentage =
-    totalBudget > 0 ? (totalBudgetSpent / totalBudget) * 100 : 0;
+    totalBudget > 0 ? (totalBudgetSpent / totalBudget) * 100 : 0
 
-  const visibleBudgetUsage = Math.min(budgetUsagePercentage, 100);
+  const visibleBudgetUsage = Math.min(budgetUsagePercentage, 100)
 
   const overBudgetCount = budgetSummaryItems.filter(
     (budget) => budget.percentage >= 100,
-  ).length;
+  ).length
 
   const warningBudgetCount = budgetSummaryItems.filter(
     (budget) => budget.percentage >= 75 && budget.percentage < 100,
-  ).length;
+  ).length
 
-  const typedRecent = (recentData ?? []) as unknown as RecentTransaction[];
-  const typedRecurring = (recurringData ?? []) as RecurringTransaction[];
+  const typedRecent = (recentData ?? []) as unknown as RecentTransaction[]
+  const typedRecurring = (recurringData ?? []) as RecurringTransaction[]
 
   const biggestExpense =
-    expenses > 0 ? Math.min((expenses / Math.max(income, 1)) * 100, 100) : 0;
+    expenses > 0 ? Math.min((expenses / Math.max(income, 1)) * 100, 100) : 0
 
   const savingsRate =
-    income > 0 ? Math.max((monthResult / income) * 100, 0) : 0;
+    income > 0 ? Math.max((periodResult / income) * 100, 0) : 0
 
   const balanceStatus =
-    monthResult >= 0
+    periodResult >= 0
       ? isEnglish
-        ? "Positive month"
-        : "Mês positivo"
+        ? "Positive period"
+        : "Período positivo"
       : isEnglish
         ? "Attention needed"
-        : "Atenção necessária";
+        : "Atenção necessária"
 
   const budgetStatus =
     overBudgetCount > 0
@@ -660,7 +745,7 @@ export default async function DashboardPage({
             bar: "bg-emerald-300",
             text: "text-emerald-200",
             badge: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
-          };
+          }
 
   const dashboardAlerts = [
     ...(overBudgetCount > 0
@@ -687,7 +772,7 @@ export default async function DashboardPage({
             level: "warning" as const,
             title: isEnglish
               ? "Some budgets are near their limits"
-              : "Alguns orçamentos estão perto do limite",
+              : "Alguns orçamentos estão perto dos limites",
             description: isEnglish
               ? "Keep an eye on your spending."
               : "Fique atento aos seus gastos.",
@@ -731,10 +816,9 @@ export default async function DashboardPage({
           },
         ]
       : []),
-  ];
+  ]
 
-  return (
-    <main className="space-y-6 lg:space-y-8">
+  return (    <main className="space-y-6 lg:space-y-8">
       <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-slate-900/90 via-slate-900/72 to-emerald-950/30 px-5 py-6 shadow-[0_30px_80px_rgba(0,0,0,0.28)] sm:px-7 sm:py-8 lg:px-9 lg:py-10">
         <div
           aria-hidden="true"
@@ -758,17 +842,134 @@ export default async function DashboardPage({
 
             <p className="mt-3 max-w-xl text-sm leading-6 text-slate-300 sm:text-base">
               {isEnglish
-                ? `A precise view of your financial position in ${getMonthLabel(
-                    locale,
-                  )}.`
-                : `Uma visão precisa da sua posição financeira em ${getMonthLabel(
-                    locale,
-                  )}.`}
+                ? `A precise view of your financial position and transactions from ${periodLabel}.`
+                : `Uma visão precisa da sua posição financeira e movimentações de ${periodLabel}.`}
             </p>
+
+<form
+  className="mt-6 flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between"
+  method="get"
+>
+  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-300/10 text-emerald-200">
+      <svg
+        aria-hidden="true"
+        className="h-4 w-4"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      >
+        <rect height="16" rx="3" width="17" x="3.5" y="5" />
+        <path d="M8 3v4M16 3v4M3.5 10h17" strokeLinecap="round" />
+      </svg>
+    </span>
+
+    <div className="min-w-0">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+        {isEnglish ? "Selected period" : "Período selecionado"}
+      </p>
+
+      <p className="truncate text-sm font-semibold text-slate-100">
+        {periodLabel}
+      </p>
+    </div>
+
+    <div className="ml-0 flex flex-wrap items-center gap-1.5 sm:ml-2">
+      <Link
+        className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.07] hover:text-white"
+        href={`/${locale}/dashboard?from=${defaultPeriod.from}&to=${defaultPeriod.to}`}
+      >
+        {isEnglish ? "This month" : "Este mês"}
+      </Link>
+
+      <Link
+        className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.07] hover:text-white"
+        href={`/${locale}/dashboard?from=${previousMonthPeriod.from}&to=${previousMonthPeriod.to}`}
+      >
+        {isEnglish ? "Previous" : "Anterior"}
+      </Link>
+
+      <Link
+        className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.07] hover:text-white"
+        href={`/${locale}/dashboard?from=${lastThirtyDaysPeriod.from}&to=${lastThirtyDaysPeriod.to}`}
+      >
+        {isEnglish ? "30 days" : "30 dias"}
+      </Link>
+    </div>
+  </div>
+
+  <details className="group relative shrink-0">
+    <summary className="flex h-9 cursor-pointer list-none items-center justify-center gap-2 rounded-xl border border-white/[0.09] bg-white/[0.04] px-3 text-xs font-semibold text-slate-300 transition hover:bg-white/[0.08] hover:text-white">
+      <svg
+        aria-hidden="true"
+        className="h-3.5 w-3.5"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth="2"
+      >
+        <path d="M4 7h16M7 12h10M10 17h4" strokeLinecap="round" />
+      </svg>
+
+      {isEnglish ? "Custom" : "Personalizar"}
+
+      <svg
+        aria-hidden="true"
+        className="h-3.5 w-3.5 transition-transform group-open:rotate-180"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth="2"
+      >
+        <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </summary>
+
+    <div className="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-[min(22rem,calc(100vw-3rem))] rounded-2xl border border-white/[0.1] bg-slate-950 p-3 shadow-[0_18px_50px_rgba(0,0,0,0.45)]">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+            {isEnglish ? "From" : "De"}
+          </span>
+
+          <input
+            className="h-10 rounded-xl border border-white/[0.1] bg-slate-900 px-3 text-sm text-white outline-none transition focus:border-emerald-400"
+            defaultValue={from}
+            name="from"
+            required
+            type="date"
+          />
+        </label>
+
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+            {isEnglish ? "To" : "Até"}
+          </span>
+
+          <input
+            className="h-10 rounded-xl border border-white/[0.1] bg-slate-900 px-3 text-sm text-white outline-none transition focus:border-emerald-400"
+            defaultValue={to}
+            name="to"
+            required
+            type="date"
+          />
+        </label>
+      </div>
+
+      <button
+        className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-xl bg-emerald-300 px-4 text-sm font-bold text-emerald-950 transition hover:bg-emerald-200"
+        type="submit"
+      >
+        {isEnglish ? "Apply period" : "Aplicar período"}
+      </button>
+    </div>
+  </details>
+</form>
 
             <div className="mt-7">
               <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-400">
-                {isEnglish ? "Net worth" : "Patrimônio líquido"}
+                {isEnglish ? "Net worth today" : "Patrimônio líquido atual"}
               </p>
 
               <p
@@ -781,14 +982,14 @@ export default async function DashboardPage({
 
               <div
                 className={`mt-4 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${
-                  monthResult >= 0
+                  periodResult >= 0
                     ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-200"
                     : "border-rose-300/20 bg-rose-300/10 text-rose-200"
                 }`}
               >
                 <span
                   className={`h-1.5 w-1.5 rounded-full ${
-                    monthResult >= 0
+                    periodResult >= 0
                       ? "bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.9)]"
                       : "bg-rose-300 shadow-[0_0_10px_rgba(253,164,175,0.9)]"
                   }`}
@@ -799,14 +1000,12 @@ export default async function DashboardPage({
               <div className="mt-5 grid max-w-xl gap-3 sm:grid-cols-2">
                 <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-3.5">
                   <p className="text-xs font-medium uppercase tracking-[0.11em] text-slate-500">
-                    {isEnglish ? "Accounts balance" : "Saldo em contas"}
+                    {isEnglish ? "Accounts balance today" : "Saldo em contas atual"}
                   </p>
 
                   <p
                     className={`mt-1.5 text-lg font-semibold ${
-                      totalBalance >= 0
-                        ? "text-slate-100"
-                        : "text-rose-300"
+                      totalBalance >= 0 ? "text-slate-100" : "text-rose-300"
                     }`}
                   >
                     {formatCurrency(totalBalance, locale)}
@@ -815,7 +1014,7 @@ export default async function DashboardPage({
 
                 <div className="rounded-2xl border border-rose-300/15 bg-rose-400/[0.06] p-3.5">
                   <p className="text-xs font-medium uppercase tracking-[0.11em] text-rose-200/60">
-                    {isEnglish ? "Open card bills" : "Faturas em aberto"}
+                    {isEnglish ? "Open card bills today" : "Faturas em aberto atuais"}
                   </p>
 
                   <p className="mt-1.5 text-lg font-semibold text-rose-300">
@@ -925,14 +1124,14 @@ export default async function DashboardPage({
               <div>
                 <p className="text-sm font-bold text-cyan-100">
                   {isEnglish
-                    ? "Record your first transaction"
-                    : "Registre seu primeiro lançamento"}
+                    ? "No transactions in this period"
+                    : "Nenhum lançamento neste período"}
                 </p>
 
                 <p className="mt-1 max-w-2xl text-sm leading-6 text-cyan-50/80">
                   {isEnglish
-                    ? "Add an income or expense to make your dashboard, charts, and financial insights useful."
-                    : "Adicione uma receita ou despesa para tornar seu dashboard, gráficos e insights financeiros mais úteis."}
+                    ? "Choose another period or add an income or expense to see it in your financial overview."
+                    : "Escolha outro período ou adicione uma receita ou despesa para vê-la na sua visão financeira."}
                 </p>
               </div>
             </div>
@@ -961,7 +1160,7 @@ export default async function DashboardPage({
           <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-medium text-slate-400">
-                {isEnglish ? "Income this month" : "Receitas do mês"}
+                {isEnglish ? "Income in period" : "Receitas no período"}
               </p>
 
               <p className="amount-positive mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em]">
@@ -977,7 +1176,7 @@ export default async function DashboardPage({
           <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-white/7">
             <div
               className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-cyan-300"
-              style={{width: income > 0 ? "100%" : "0%"}}
+              style={{ width: income > 0 ? "100%" : "0%" }}
             />
           </div>
         </article>
@@ -986,7 +1185,7 @@ export default async function DashboardPage({
           <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-medium text-slate-400">
-                {isEnglish ? "Expenses this month" : "Despesas do mês"}
+                {isEnglish ? "Expenses in period" : "Despesas no período"}
               </p>
 
               <p className="amount-negative mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em]">
@@ -1002,7 +1201,7 @@ export default async function DashboardPage({
           <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-white/7">
             <div
               className="h-full rounded-full bg-gradient-to-r from-rose-400 to-orange-300"
-              style={{width: `${biggestExpense}%`}}
+              style={{ width: `${biggestExpense}%` }}
             />
           </div>
         </article>
@@ -1011,40 +1210,38 @@ export default async function DashboardPage({
           <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-medium text-slate-400">
-                {isEnglish ? "Monthly result" : "Resultado do mês"}
+                {isEnglish ? "Period result" : "Resultado do período"}
               </p>
 
               <p
                 className={`mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] ${
-                  monthResult >= 0 ? "text-emerald-200" : "text-rose-300"
+                  periodResult >= 0 ? "text-emerald-200" : "text-rose-300"
                 }`}
               >
-                {monthResult >= 0 ? "+" : ""}
-                {formatCurrency(monthResult, locale)}
+                {periodResult >= 0 ? "+" : ""}
+                {formatCurrency(periodResult, locale)}
               </p>
             </div>
 
             <span
               className={`flex h-10 w-10 items-center justify-center rounded-2xl text-xl ${
-                monthResult >= 0
+                periodResult >= 0
                   ? "bg-emerald-400/12 text-emerald-300"
                   : "bg-rose-400/12 text-rose-300"
               }`}
             >
-              {monthResult >= 0 ? "✦" : "!"}
+              {periodResult >= 0 ? "✦" : "!"}
             </span>
           </div>
 
           <p className="mt-5 text-xs text-slate-400">
             {income > 0
               ? isEnglish
-                ? `${savingsRate.toFixed(0)}% of income retained this month.`
-                : `${savingsRate.toFixed(
-                    0,
-                  )}% da receita foi preservada neste mês.`
+                ? `${savingsRate.toFixed(0)}% of income was retained in this period.`
+                : `${savingsRate.toFixed(0)}% da receita foi preservada neste período.`
               : isEnglish
-                ? "Add income to see your monthly saving rate."
-                : "Adicione receitas para visualizar sua taxa mensal."}
+                ? "Add income to see the saving rate for this period."
+                : "Adicione receitas para visualizar a taxa de preservação neste período."}
           </p>
         </article>
       </section>
@@ -1062,9 +1259,17 @@ export default async function DashboardPage({
 
             <p className="mt-1 text-sm text-slate-400">
               {isEnglish
-                ? "Monitor how much of your category limits has already been used."
-                : "Acompanhe quanto dos limites por categoria já foi utilizado."}
+                ? "Budgets use the month of the selected start date."
+                : "Os orçamentos utilizam o mês da data inicial selecionada."}
             </p>
+
+            {periodCrossesMonths ? (
+              <p className="mt-2 text-xs font-medium text-amber-200">
+                {isEnglish
+                  ? "This period crosses more than one month. Budget limits refer to the first month only."
+                  : "Este período atravessa mais de um mês. Os limites de orçamento se referem apenas ao primeiro mês."}
+              </p>
+            ) : null}
           </div>
 
           <Link
@@ -1080,8 +1285,8 @@ export default async function DashboardPage({
             <div>
               <p className="text-sm font-semibold text-slate-200">
                 {isEnglish
-                  ? "No budgets configured for this month"
-                  : "Nenhum orçamento configurado neste mês"}
+                  ? "No budgets configured for the selected start month"
+                  : "Nenhum orçamento configurado para o mês inicial selecionado"}
               </p>
 
               <p className="mt-1 text-sm leading-6 text-slate-400">
@@ -1113,7 +1318,7 @@ export default async function DashboardPage({
 
               <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-                  {isEnglish ? "Spent" : "Gasto"}
+                  {isEnglish ? "Spent in period" : "Gasto no período"}
                 </p>
 
                 <p className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] text-rose-300">
@@ -1156,10 +1361,7 @@ export default async function DashboardPage({
                       : `${formatCurrency(
                           totalBudgetSpent,
                           locale,
-                        )} utilizados de ${formatCurrency(
-                          totalBudget,
-                          locale,
-                        )}`}
+                        )} utilizados de ${formatCurrency(totalBudget, locale)}`}
                   </p>
                 </div>
 
@@ -1173,7 +1375,7 @@ export default async function DashboardPage({
               <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-white/[0.07]">
                 <div
                   className={`h-full rounded-full transition-all ${budgetStatus.bar}`}
-                  style={{width: `${visibleBudgetUsage}%`}}
+                  style={{ width: `${visibleBudgetUsage}%` }}
                 />
               </div>
 
@@ -1184,14 +1386,14 @@ export default async function DashboardPage({
 
             <div className="mt-5 grid gap-3 lg:grid-cols-3">
               {budgetSummaryItems.slice(0, 3).map((budget) => {
-                const visiblePercentage = Math.min(budget.percentage, 100);
+                const visiblePercentage = Math.min(budget.percentage, 100)
 
                 const barClass =
                   budget.percentage >= 100
                     ? "bg-rose-400"
                     : budget.percentage >= 75
                       ? "bg-amber-300"
-                      : "bg-emerald-300";
+                      : "bg-emerald-300"
 
                 return (
                   <div
@@ -1228,21 +1430,18 @@ export default async function DashboardPage({
                     <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
                       <div
                         className={`h-full rounded-full ${barClass}`}
-                        style={{width: `${visiblePercentage}%`}}
+                        style={{ width: `${visiblePercentage}%` }}
                       />
                     </div>
                   </div>
-                );
+                )
               })}
             </div>
           </div>
         )}
       </section>
 
-      <AlertsSummary
-        locale={locale}
-        alerts={dashboardAlerts}
-      />
+      <AlertsSummary locale={locale} alerts={dashboardAlerts} />
 
       <CashFlowChart data={cashFlowPoints} locale={locale} />
 
@@ -1271,6 +1470,12 @@ export default async function DashboardPage({
               <h2 className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] text-white">
                 {isEnglish ? "Where your money is" : "Onde está seu dinheiro"}
               </h2>
+
+              <p className="mt-1 text-sm text-slate-400">
+                {isEnglish
+                  ? "Current balances, independent of the selected period."
+                  : "Saldos atuais, independentes do período selecionado."}
+              </p>
             </div>
 
             <Link
@@ -1377,7 +1582,7 @@ export default async function DashboardPage({
           ) : (
             <div className="mt-5 space-y-2">
               {typedRecurring.map((item) => {
-                const isIncome = item.type === "income";
+                const isIncome = item.type === "income"
 
                 return (
                   <div
@@ -1408,7 +1613,7 @@ export default async function DashboardPage({
                       {formatCurrency(Number(item.amount), locale)}
                     </span>
                   </div>
-                );
+                )
               })}
             </div>
           )}
@@ -1431,12 +1636,18 @@ export default async function DashboardPage({
             </p>
 
             <h2 className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] text-white">
-              {isEnglish ? "Recent transactions" : "Lançamentos recentes"}
+              {isEnglish
+                ? "Transactions in period"
+                : "Lançamentos no período"}
             </h2>
+
+            <p className="mt-1 text-sm text-slate-400">
+              {periodLabel}
+            </p>
           </div>
 
           <Link
-            href={`/${locale}/transactions`}
+            href={`/${locale}/transactions?from=${from}&to=${to}`}
             className="rounded-xl border border-white/10 bg-white/[0.045] px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/[0.09] hover:text-white"
           >
             {isEnglish ? "View all" : "Ver todos"} →
@@ -1451,25 +1662,25 @@ export default async function DashboardPage({
 
             <p className="mt-4 text-sm font-semibold text-slate-200">
               {isEnglish
-                ? "Your activity will appear here."
-                : "Sua atividade aparecerá aqui."}
+                ? "No activity in this period."
+                : "Nenhuma atividade neste período."}
             </p>
 
             <p className="mt-2 text-sm text-slate-400">
               {isEnglish
-                ? "Start by recording your first transaction."
-                : "Comece registrando seu primeiro lançamento."}
+                ? "Choose another date range or create a new transaction."
+                : "Escolha outro intervalo de datas ou crie um novo lançamento."}
             </p>
           </div>
         ) : (
           <div className="divide-y divide-white/[0.07]">
             {typedRecent.map((transaction) => {
-              const account = getFirstRelation(transaction.account);
-              const category = getFirstRelation(transaction.category);
-              const isIncome = transaction.type === "income";
+              const account = getFirstRelation(transaction.account)
+              const category = getFirstRelation(transaction.category)
+              const isIncome = transaction.type === "income"
 
               const accentColor =
-                category?.color ?? (isIncome ? "#6ee7b7" : "#fda4af");
+                category?.color ?? (isIncome ? "#6ee7b7" : "#fda4af")
 
               return (
                 <Link
@@ -1529,11 +1740,11 @@ export default async function DashboardPage({
                     {formatCurrency(Number(transaction.amount), locale)}
                   </p>
                 </Link>
-              );
+              )
             })}
           </div>
         )}
       </section>
     </main>
-  );
+  )
 }
