@@ -3,7 +3,10 @@ import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { CashFlowChart } from "@/components/dashboard/cash-flow-chart"
 import { CategorySpendingChart } from "@/components/dashboard/category-spending-chart"
-import { AccountDistributionChart } from "@/components/dashboard/account-distribution-chart"
+import {
+  SpendingSourceChart,
+  type SpendingSource,
+} from "@/components/dashboard/spending-source-chart"
 import { CategoryIcon } from "@/components/categories/category-icon"
 import { AlertsSummary } from "@/components/dashboard/alerts-summary"
 
@@ -28,6 +31,14 @@ type Category = {
   name: string
   color: string | null
   icon: string | null
+}
+
+type CreditCardSource = {
+  id: string
+  name: string
+  institution: string | null
+  brand: string | null
+  last_four: string | null
 }
 
 type RecentTransaction = {
@@ -62,6 +73,12 @@ type CashFlowItem = {
 type CategoryExpenseItem = {
   amount: number | string
   category: Category[] | Category | null
+}
+
+type SpendingSourceTransaction = {
+  amount: number | string
+  account: Account[] | Account | null
+  credit_card: CreditCardSource[] | CreditCardSource | null
 }
 
 type CategorySpending = {
@@ -138,7 +155,6 @@ function isValidDateString(value: string | undefined) {
 
 function getDefaultPeriod() {
   const now = new Date()
-
   const start = new Date(now.getFullYear(), now.getMonth(), 1)
   const end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
 
@@ -184,7 +200,6 @@ function getExclusiveEndDate(dateString: string) {
 
 function getPreviousMonthPeriod() {
   const now = new Date()
-
   const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
   const end = new Date(now.getFullYear(), now.getMonth(), 0)
 
@@ -332,6 +347,7 @@ export default async function DashboardPage({
     { data: recurringData, error: recurringError },
     { data: cashFlowData, error: cashFlowError },
     { data: categoryExpenseData, error: categoryExpenseError },
+    { data: spendingSourceData, error: spendingSourceError },
     { data: budgetsData, error: budgetsError },
     { data: creditCardStatements, error: creditCardStatementsError },
     { data: creditCardTransactions, error: creditCardTransactionsError },
@@ -416,6 +432,28 @@ export default async function DashboardPage({
       .lt("occurred_on", periodEndExclusive),
 
     supabase
+      .from("transactions")
+      .select(`
+        amount,
+        account:accounts!transactions_account_id_fkey (
+          id,
+          name,
+          color
+        ),
+        credit_card:credit_cards!transactions_credit_card_id_fkey (
+          id,
+          name,
+          institution,
+          brand,
+          last_four
+        )
+      `)
+      .eq("user_id", user.id)
+      .eq("type", "expense")
+      .gte("occurred_on", from)
+      .lt("occurred_on", periodEndExclusive),
+
+    supabase
       .from("budgets")
       .select(`
         id,
@@ -453,6 +491,7 @@ export default async function DashboardPage({
     recurringError ??
     cashFlowError ??
     categoryExpenseError ??
+    spendingSourceError ??
     budgetsError ??
     creditCardStatementsError ??
     creditCardTransactionsError
@@ -484,10 +523,6 @@ export default async function DashboardPage({
 
   const periodResult = income - expenses
 
-  /*
-   * Saldo de conta e patrimônio são posição ATUAL:
-   * não mudam quando o usuário altera o intervalo de movimentações.
-   */
   const accountBalances: AccountBalance[] = typedAccounts.map((account) => {
     const balance = (allTransactions ?? []).reduce(
       (total, transaction) => {
@@ -644,6 +679,83 @@ export default async function DashboardPage({
       ...category,
       percentage:
         expenses > 0 ? Math.min((category.amount / expenses) * 100, 100) : 0,
+    }))
+
+  const spendingSourceMap = new Map<
+    string,
+    Omit<SpendingSource, "percentage">
+  >()
+
+  ;((spendingSourceData ?? []) as unknown as SpendingSourceTransaction[]).forEach(
+    (transaction) => {
+      const account = getFirstRelation(transaction.account)
+      const creditCard = getFirstRelation(transaction.credit_card)
+      const amount = Number(transaction.amount)
+
+      if (creditCard) {
+        const sourceId = `credit-card-${creditCard.id}`
+
+        const cardDetails = [
+          creditCard.institution,
+          creditCard.brand,
+          creditCard.last_four ? `•••• ${creditCard.last_four}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+
+        const existing = spendingSourceMap.get(sourceId) ?? {
+          id: sourceId,
+          name: cardDetails
+            ? `${creditCard.name} — ${cardDetails}`
+            : creditCard.name,
+          kind: "credit_card" as const,
+          color: "#fbbf24",
+          amount: 0,
+        }
+
+        existing.amount += amount
+        spendingSourceMap.set(sourceId, existing)
+
+        return
+      }
+
+      if (account) {
+        const sourceId = `account-${account.id}`
+
+        const existing = spendingSourceMap.get(sourceId) ?? {
+          id: sourceId,
+          name: account.name,
+          kind: "account" as const,
+          color: account.color ?? "#60a5fa",
+          amount: 0,
+        }
+
+        existing.amount += amount
+        spendingSourceMap.set(sourceId, existing)
+
+        return
+      }
+
+      const existing = spendingSourceMap.get("other") ?? {
+        id: "other",
+        name: isEnglish ? "No source informed" : "Sem origem informada",
+        kind: "other" as const,
+        color: "#94a3b8",
+        amount: 0,
+      }
+
+      existing.amount += amount
+      spendingSourceMap.set("other", existing)
+    },
+  )
+
+  const spendingSources: SpendingSource[] = Array.from(
+    spendingSourceMap.values(),
+  )
+    .sort((first, second) => second.amount - first.amount)
+    .map((source) => ({
+      ...source,
+      percentage: expenses > 0 ? (source.amount / expenses) * 100 : 0,
     }))
 
   const spentByCategory = new Map<string, number>()
@@ -818,13 +930,13 @@ export default async function DashboardPage({
       : []),
   ]
 
-  return (    <main className="space-y-6 lg:space-y-8">
+  return (
+        <main className="space-y-6 lg:space-y-8">
       <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-slate-900/90 via-slate-900/72 to-emerald-950/30 px-5 py-6 shadow-[0_30px_80px_rgba(0,0,0,0.28)] sm:px-7 sm:py-8 lg:px-9 lg:py-10">
         <div
           aria-hidden="true"
           className="pointer-events-none absolute -right-24 -top-28 h-72 w-72 rounded-full bg-emerald-400/20 blur-3xl"
         />
-
         <div
           aria-hidden="true"
           className="pointer-events-none absolute bottom-0 left-1/3 h-44 w-80 rounded-full bg-cyan-500/10 blur-3xl"
@@ -846,126 +958,7 @@ export default async function DashboardPage({
                 : `Uma visão precisa da sua posição financeira e movimentações de ${periodLabel}.`}
             </p>
 
-<form
-  className="mt-6 flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between"
-  method="get"
->
-  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-300/10 text-emerald-200">
-      <svg
-        aria-hidden="true"
-        className="h-4 w-4"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-        strokeWidth="1.8"
-      >
-        <rect height="16" rx="3" width="17" x="3.5" y="5" />
-        <path d="M8 3v4M16 3v4M3.5 10h17" strokeLinecap="round" />
-      </svg>
-    </span>
 
-    <div className="min-w-0">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-        {isEnglish ? "Selected period" : "Período selecionado"}
-      </p>
-
-      <p className="truncate text-sm font-semibold text-slate-100">
-        {periodLabel}
-      </p>
-    </div>
-
-    <div className="ml-0 flex flex-wrap items-center gap-1.5 sm:ml-2">
-      <Link
-        className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.07] hover:text-white"
-        href={`/${locale}/dashboard?from=${defaultPeriod.from}&to=${defaultPeriod.to}`}
-      >
-        {isEnglish ? "This month" : "Este mês"}
-      </Link>
-
-      <Link
-        className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.07] hover:text-white"
-        href={`/${locale}/dashboard?from=${previousMonthPeriod.from}&to=${previousMonthPeriod.to}`}
-      >
-        {isEnglish ? "Previous" : "Anterior"}
-      </Link>
-
-      <Link
-        className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-400 transition hover:bg-white/[0.07] hover:text-white"
-        href={`/${locale}/dashboard?from=${lastThirtyDaysPeriod.from}&to=${lastThirtyDaysPeriod.to}`}
-      >
-        {isEnglish ? "30 days" : "30 dias"}
-      </Link>
-    </div>
-  </div>
-
-  <details className="group relative shrink-0">
-    <summary className="flex h-9 cursor-pointer list-none items-center justify-center gap-2 rounded-xl border border-white/[0.09] bg-white/[0.04] px-3 text-xs font-semibold text-slate-300 transition hover:bg-white/[0.08] hover:text-white">
-      <svg
-        aria-hidden="true"
-        className="h-3.5 w-3.5"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-        strokeWidth="2"
-      >
-        <path d="M4 7h16M7 12h10M10 17h4" strokeLinecap="round" />
-      </svg>
-
-      {isEnglish ? "Custom" : "Personalizar"}
-
-      <svg
-        aria-hidden="true"
-        className="h-3.5 w-3.5 transition-transform group-open:rotate-180"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-        strokeWidth="2"
-      >
-        <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </summary>
-
-    <div className="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-[min(22rem,calc(100vw-3rem))] rounded-2xl border border-white/[0.1] bg-slate-950 p-3 shadow-[0_18px_50px_rgba(0,0,0,0.45)]">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-            {isEnglish ? "From" : "De"}
-          </span>
-
-          <input
-            className="h-10 rounded-xl border border-white/[0.1] bg-slate-900 px-3 text-sm text-white outline-none transition focus:border-emerald-400"
-            defaultValue={from}
-            name="from"
-            required
-            type="date"
-          />
-        </label>
-
-        <label className="flex flex-col gap-1.5">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-            {isEnglish ? "To" : "Até"}
-          </span>
-
-          <input
-            className="h-10 rounded-xl border border-white/[0.1] bg-slate-900 px-3 text-sm text-white outline-none transition focus:border-emerald-400"
-            defaultValue={to}
-            name="to"
-            required
-            type="date"
-          />
-        </label>
-      </div>
-
-      <button
-        className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-xl bg-emerald-300 px-4 text-sm font-bold text-emerald-950 transition hover:bg-emerald-200"
-        type="submit"
-      >
-        {isEnglish ? "Apply period" : "Aplicar período"}
-      </button>
-    </div>
-  </details>
-</form>
 
             <div className="mt-7">
               <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-400">
@@ -1002,7 +995,6 @@ export default async function DashboardPage({
                   <p className="text-xs font-medium uppercase tracking-[0.11em] text-slate-500">
                     {isEnglish ? "Accounts balance today" : "Saldo em contas atual"}
                   </p>
-
                   <p
                     className={`mt-1.5 text-lg font-semibold ${
                       totalBalance >= 0 ? "text-slate-100" : "text-rose-300"
@@ -1016,7 +1008,6 @@ export default async function DashboardPage({
                   <p className="text-xs font-medium uppercase tracking-[0.11em] text-rose-200/60">
                     {isEnglish ? "Open card bills today" : "Faturas em aberto atuais"}
                   </p>
-
                   <p className="mt-1.5 text-lg font-semibold text-rose-300">
                     -{formatCurrency(totalCreditCardDebt, locale)}
                   </p>
@@ -1033,12 +1024,10 @@ export default async function DashboardPage({
               <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-950/12 text-lg">
                 +
               </span>
-
               <span>
                 <span className="block text-sm font-bold">
                   {isEnglish ? "New transaction" : "Novo lançamento"}
                 </span>
-
                 <span className="mt-0.5 block text-xs text-emerald-950/70">
                   {isEnglish
                     ? "Add income or expense"
@@ -1054,12 +1043,10 @@ export default async function DashboardPage({
               <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-400/15 text-lg text-sky-200">
                 ⇄
               </span>
-
               <span>
                 <span className="block text-sm font-bold">
                   {isEnglish ? "Transfer money" : "Transferir dinheiro"}
                 </span>
-
                 <span className="mt-0.5 block text-xs text-slate-400">
                   {isEnglish
                     ? "Move between accounts"
@@ -1077,20 +1064,17 @@ export default async function DashboardPage({
             aria-hidden="true"
             className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-emerald-300/20 blur-3xl"
           />
-
           <div className="relative flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-start gap-4">
               <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-300 text-xl font-black text-emerald-950 shadow-[0_10px_24px_rgba(52,211,153,0.22)]">
                 1
               </span>
-
               <div>
                 <p className="text-sm font-bold text-emerald-100">
                   {isEnglish
                     ? "Start with your first account"
                     : "Comece pela sua primeira conta"}
                 </p>
-
                 <p className="mt-1 max-w-2xl text-sm leading-6 text-emerald-50/80">
                   {isEnglish
                     ? "Add your bank account, wallet, savings account, or investment balance to begin tracking your finances."
@@ -1098,7 +1082,6 @@ export default async function DashboardPage({
                 </p>
               </div>
             </div>
-
             <Link
               href={`/${locale}/accounts/new`}
               className="inline-flex h-11 shrink-0 items-center justify-center rounded-xl bg-emerald-300 px-4 text-sm font-bold text-emerald-950 shadow-[0_10px_24px_rgba(52,211,153,0.18)] transition hover:bg-emerald-200"
@@ -1114,20 +1097,17 @@ export default async function DashboardPage({
             aria-hidden="true"
             className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-cyan-300/20 blur-3xl"
           />
-
           <div className="relative flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-start gap-4">
               <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-cyan-300 text-xl font-black text-cyan-950 shadow-[0_10px_24px_rgba(56,189,248,0.22)]">
                 2
               </span>
-
               <div>
                 <p className="text-sm font-bold text-cyan-100">
                   {isEnglish
                     ? "No transactions in this period"
                     : "Nenhum lançamento neste período"}
                 </p>
-
                 <p className="mt-1 max-w-2xl text-sm leading-6 text-cyan-50/80">
                   {isEnglish
                     ? "Choose another period or add an income or expense to see it in your financial overview."
@@ -1135,7 +1115,6 @@ export default async function DashboardPage({
                 </p>
               </div>
             </div>
-
             <Link
               href={`/${locale}/transactions/new`}
               className="inline-flex h-11 shrink-0 items-center justify-center rounded-xl bg-cyan-300 px-4 text-sm font-bold text-cyan-950 shadow-[0_10px_24px_rgba(56,189,248,0.18)] transition hover:bg-cyan-200"
@@ -1162,17 +1141,14 @@ export default async function DashboardPage({
               <p className="text-sm font-medium text-slate-400">
                 {isEnglish ? "Income in period" : "Receitas no período"}
               </p>
-
               <p className="amount-positive mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em]">
                 {formatCurrency(income, locale)}
               </p>
             </div>
-
             <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-400/12 text-xl text-emerald-300">
               ↗
             </span>
           </div>
-
           <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-white/7">
             <div
               className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-cyan-300"
@@ -1187,17 +1163,14 @@ export default async function DashboardPage({
               <p className="text-sm font-medium text-slate-400">
                 {isEnglish ? "Expenses in period" : "Despesas no período"}
               </p>
-
               <p className="amount-negative mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em]">
                 {formatCurrency(expenses, locale)}
               </p>
             </div>
-
             <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-rose-400/12 text-xl text-rose-300">
               ↘
             </span>
           </div>
-
           <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-white/7">
             <div
               className="h-full rounded-full bg-gradient-to-r from-rose-400 to-orange-300"
@@ -1212,7 +1185,6 @@ export default async function DashboardPage({
               <p className="text-sm font-medium text-slate-400">
                 {isEnglish ? "Period result" : "Resultado do período"}
               </p>
-
               <p
                 className={`mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] ${
                   periodResult >= 0 ? "text-emerald-200" : "text-rose-300"
@@ -1222,7 +1194,6 @@ export default async function DashboardPage({
                 {formatCurrency(periodResult, locale)}
               </p>
             </div>
-
             <span
               className={`flex h-10 w-10 items-center justify-center rounded-2xl text-xl ${
                 periodResult >= 0
@@ -1233,7 +1204,6 @@ export default async function DashboardPage({
               {periodResult >= 0 ? "✦" : "!"}
             </span>
           </div>
-
           <p className="mt-5 text-xs text-slate-400">
             {income > 0
               ? isEnglish
@@ -1252,17 +1222,14 @@ export default async function DashboardPage({
             <p className="app-kicker">
               {isEnglish ? "Monthly planning" : "Planejamento mensal"}
             </p>
-
             <h2 className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] text-white">
               {isEnglish ? "Budget overview" : "Resumo de orçamentos"}
             </h2>
-
             <p className="mt-1 text-sm text-slate-400">
               {isEnglish
                 ? "Budgets use the month of the selected start date."
                 : "Os orçamentos utilizam o mês da data inicial selecionada."}
             </p>
-
             {periodCrossesMonths ? (
               <p className="mt-2 text-xs font-medium text-amber-200">
                 {isEnglish
@@ -1271,7 +1238,6 @@ export default async function DashboardPage({
               </p>
             ) : null}
           </div>
-
           <Link
             href={`/${locale}/budgets`}
             className="inline-flex h-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.045] px-4 text-sm font-semibold text-slate-300 transition hover:bg-white/[0.09] hover:text-white"
@@ -1288,14 +1254,12 @@ export default async function DashboardPage({
                   ? "No budgets configured for the selected start month"
                   : "Nenhum orçamento configurado para o mês inicial selecionado"}
               </p>
-
               <p className="mt-1 text-sm leading-6 text-slate-400">
                 {isEnglish
                   ? "Set spending limits by expense category to track your plan automatically."
                   : "Defina limites por categoria de despesa para acompanhar seu planejamento automaticamente."}
               </p>
             </div>
-
             <Link
               href={`/${locale}/budgets`}
               className="app-shine inline-flex h-10 shrink-0 items-center justify-center rounded-xl bg-amber-300 px-4 text-sm font-bold text-amber-950 shadow-[0_10px_24px_rgba(252,211,77,0.13)] transition hover:bg-amber-200"
@@ -1310,7 +1274,6 @@ export default async function DashboardPage({
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                   {isEnglish ? "Planned" : "Planejado"}
                 </p>
-
                 <p className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] text-slate-100">
                   {formatCurrency(totalBudget, locale)}
                 </p>
@@ -1320,7 +1283,6 @@ export default async function DashboardPage({
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                   {isEnglish ? "Spent in period" : "Gasto no período"}
                 </p>
-
                 <p className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] text-rose-300">
                   {formatCurrency(totalBudgetSpent, locale)}
                 </p>
@@ -1330,7 +1292,6 @@ export default async function DashboardPage({
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                   {isEnglish ? "Available" : "Disponível"}
                 </p>
-
                 <p
                   className={`mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] ${
                     totalBudgetRemaining >= 0
@@ -1351,7 +1312,6 @@ export default async function DashboardPage({
                       ? "Overall budget usage"
                       : "Uso geral do orçamento"}
                   </p>
-
                   <p className="mt-1 text-xs text-slate-400">
                     {isEnglish
                       ? `${formatCurrency(
@@ -1364,7 +1324,6 @@ export default async function DashboardPage({
                         )} utilizados de ${formatCurrency(totalBudget, locale)}`}
                   </p>
                 </div>
-
                 <span
                   className={`rounded-full border px-3 py-1.5 text-xs font-bold ${budgetStatus.badge}`}
                 >
@@ -1387,7 +1346,6 @@ export default async function DashboardPage({
             <div className="mt-5 grid gap-3 lg:grid-cols-3">
               {budgetSummaryItems.slice(0, 3).map((budget) => {
                 const visiblePercentage = Math.min(budget.percentage, 100)
-
                 const barClass =
                   budget.percentage >= 100
                     ? "bg-rose-400"
@@ -1414,12 +1372,10 @@ export default async function DashboardPage({
                           strokeWidth={1.9}
                         />
                       </span>
-
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-slate-100">
                           {budget.category.name}
                         </p>
-
                         <p className="mt-0.5 text-xs text-slate-400">
                           {formatCurrency(budget.spent, locale)} /{" "}
                           {formatCurrency(budget.amount, locale)}
@@ -1452,12 +1408,14 @@ export default async function DashboardPage({
           locale={locale}
         />
 
-        <AccountDistributionChart
-          data={accountBalancesWithShare}
-          totalBalance={totalBalance}
+        <SpendingSourceChart
+          data={spendingSources}
+          total={expenses}
           locale={locale}
         />
       </section>
+
+
 
       <section className="grid gap-5 xl:grid-cols-[1.22fr_0.78fr]">
         <article className="app-surface rounded-[1.7rem] p-5 sm:p-6">
@@ -1466,11 +1424,9 @@ export default async function DashboardPage({
               <p className="app-kicker">
                 {isEnglish ? "Accounts" : "Contas"}
               </p>
-
               <h2 className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] text-white">
                 {isEnglish ? "Where your money is" : "Onde está seu dinheiro"}
               </h2>
-
               <p className="mt-1 text-sm text-slate-400">
                 {isEnglish
                   ? "Current balances, independent of the selected period."
@@ -1491,13 +1447,11 @@ export default async function DashboardPage({
               <p className="text-sm font-medium text-slate-200">
                 {isEnglish ? "No accounts yet" : "Nenhuma conta ainda"}
               </p>
-
               <p className="mt-2 text-sm leading-6 text-slate-400">
                 {isEnglish
                   ? "Create your first account to track your balance."
                   : "Crie sua primeira conta para acompanhar seus saldos."}
               </p>
-
               <Link
                 href={`/${locale}/accounts/new`}
                 className="mt-4 inline-flex rounded-xl bg-emerald-300 px-4 py-2.5 text-xs font-bold text-emerald-950"
@@ -1518,12 +1472,10 @@ export default async function DashboardPage({
                           color: account.color ?? "#60a5fa",
                         }}
                       />
-
                       <span className="truncate text-sm font-medium text-slate-200">
                         {account.name}
                       </span>
                     </div>
-
                     <span
                       className={`shrink-0 text-sm font-semibold ${
                         account.balance >= 0
@@ -1555,7 +1507,6 @@ export default async function DashboardPage({
             <p className="app-kicker">
               {isEnglish ? "Upcoming" : "Próximas"}
             </p>
-
             <h2 className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] text-white">
               {isEnglish ? "Recurring items" : "Recorrências"}
             </h2>
@@ -1568,7 +1519,6 @@ export default async function DashboardPage({
                   ? "No active recurring transactions."
                   : "Nenhuma recorrência ativa."}
               </p>
-
               <Link
                 href={`/${locale}/recurring`}
                 className="mt-3 inline-flex text-xs font-bold text-emerald-300 hover:text-emerald-200"
@@ -1593,7 +1543,6 @@ export default async function DashboardPage({
                       <p className="truncate text-sm font-semibold text-slate-200">
                         {item.description}
                       </p>
-
                       <p className="mt-1 text-xs text-slate-400">
                         {item.next_occurrence
                           ? `${isEnglish ? "Due" : "Próxima"}: ${formatDate(
@@ -1634,16 +1583,12 @@ export default async function DashboardPage({
             <p className="app-kicker">
               {isEnglish ? "Activity" : "Atividade"}
             </p>
-
             <h2 className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] text-white">
               {isEnglish
                 ? "Transactions in period"
                 : "Lançamentos no período"}
             </h2>
-
-            <p className="mt-1 text-sm text-slate-400">
-              {periodLabel}
-            </p>
+            <p className="mt-1 text-sm text-slate-400">{periodLabel}</p>
           </div>
 
           <Link
@@ -1659,13 +1604,11 @@ export default async function DashboardPage({
             <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.06] text-xl text-slate-400">
               ✦
             </span>
-
             <p className="mt-4 text-sm font-semibold text-slate-200">
               {isEnglish
                 ? "No activity in this period."
                 : "Nenhuma atividade neste período."}
             </p>
-
             <p className="mt-2 text-sm text-slate-400">
               {isEnglish
                 ? "Choose another date range or create a new transaction."
@@ -1718,7 +1661,6 @@ export default async function DashboardPage({
                       <p className="truncate text-sm font-semibold text-slate-100">
                         {transaction.description}
                       </p>
-
                       <p className="mt-1 truncate text-xs text-slate-400">
                         {category?.name ??
                           (isEnglish ? "No category" : "Sem categoria")}

@@ -3,8 +3,10 @@ import Link from "next/link"
 import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { CategoryIcon } from "@/components/categories/category-icon"
-import { GoalForm } from "@/components/goals/goal-form"
+import { GoalCreateToggle } from "@/components/goals/goal-create-toggle"
 import { GoalActions } from "@/components/goals/goal-actions"
+import { GoalCreateModal } from "@/components/goals/goal-create-modal"
+
 
 export const metadata: Metadata = {
   title: "Metas e objetivos",
@@ -441,7 +443,7 @@ export default async function GoalsPage({ params }: GoalsPageProps) {
       </section>
 
       <section className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
-        <GoalForm locale={locale} />
+        <GoalCreateToggle locale={locale} />
 
         <article className="app-surface overflow-hidden rounded-[1.7rem]">
           <div className="flex flex-col gap-3 border-b border-white/[0.08] px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
