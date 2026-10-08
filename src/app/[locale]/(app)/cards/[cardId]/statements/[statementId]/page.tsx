@@ -188,12 +188,12 @@ const [
             </p>
           </div>
 
-          <Link
-            href={`/${locale}/cards/${cardId}`}
-            className="inline-flex h-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] px-4 text-xs font-bold text-slate-200 transition hover:bg-white/[0.1] hover:text-white"
-          >
-            ← {isEnglish ? "Back to card" : "Voltar ao cartão"}
-          </Link>
+<Link
+  href={`/${locale}/cards`}
+  className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/[0.08] hover:text-white"
+>
+  ← {isEnglish ? "Back to cards" : "Voltar ao cartão"}
+</Link>
         </div>
       </section>
 

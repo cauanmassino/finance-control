@@ -9,8 +9,23 @@ type AccountOption = {
   name: string;
 };
 
-type CreditCardFormProps = {
+type CreditCard = {
+  id: string;
+  name: string;
+  institution: string | null;
+  brand: string | null;
+  last_four: string | null;
+  credit_limit: number | string | null;
+  closing_day: number;
+  due_day: number;
+  color: string;
+  payment_account_id: string | null;
+  is_active: boolean;
+};
+
+type EditCreditCardFormProps = {
   locale: string;
+  card: CreditCard;
   accounts: AccountOption[];
 };
 
@@ -23,14 +38,15 @@ function normalizeLastFour(value: string) {
   return value.replace(/\D/g, "").slice(0, 4);
 }
 
-export function CreditCardForm({
+export function EditCreditCardForm({
   locale,
+  card,
   accounts,
-}: CreditCardFormProps) {
+}: EditCreditCardFormProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<FormError | null>(null);
-  const [lastFour, setLastFour] = useState("");
+  const [lastFour, setLastFour] = useState(card.last_four ?? "");
 
   const isEnglish = locale === "en";
 
@@ -48,10 +64,7 @@ export function CreditCardForm({
     const trimmedName = name.trim();
 
     if (!trimmedName) {
-      return text(
-        "Informe o nome do cartão.",
-        "Enter the card name.",
-      );
+      return text("Informe o nome do cartão.", "Enter the card name.");
     }
 
     if (trimmedName.length > 80) {
@@ -80,16 +93,13 @@ export function CreditCardForm({
 
     if (dueDay < 1 || dueDay > 31) {
       return text(
-        "O due day deve ser entre 1 e 31.",
+        "O dia de vencimento deve ser entre 1 e 31.",
         "Due day must be between 1 and 31.",
       );
     }
 
     if (!/^#[0-9A-Fa-f]{6}$/.test(color)) {
-      return text(
-        "Escolha uma cor válida.",
-        "Choose a valid color.",
-      );
+      return text("Escolha uma cor válida.", "Choose a valid color.");
     }
 
     return null;
@@ -156,7 +166,6 @@ export function CreditCardForm({
         }
 
         const payload = {
-          user_id: user.id,
           name,
           institution: institution || null,
           brand: brand || null,
@@ -168,17 +177,18 @@ export function CreditCardForm({
           due_day: dueDay,
           color,
           payment_account_id: paymentAccountId,
-          is_active: true,
         };
 
-        const {error: insertError} = await supabase
+        const {error: updateError} = await supabase
           .from("credit_cards")
-          .insert(payload);
+          .update(payload)
+          .eq("id", card.id)
+          .eq("user_id", user.id);
 
-        if (insertError) {
-          console.error("Erro ao criar cartão:", insertError);
+        if (updateError) {
+          console.error("Erro ao atualizar cartão:", updateError);
 
-          if (insertError.code === "23505") {
+          if (updateError.code === "23505") {
             throw new Error(
               text(
                 "Você já possui um cartão com este nome.",
@@ -187,7 +197,7 @@ export function CreditCardForm({
             );
           }
 
-          if (insertError.code === "23514") {
+          if (updateError.code === "23514") {
             throw new Error(
               text(
                 "Verifique os dados do cartão e tente novamente.",
@@ -198,8 +208,8 @@ export function CreditCardForm({
 
           throw new Error(
             text(
-              "Não foi possível criar o cartão.",
-              "Could not create the credit card.",
+              "Não foi possível atualizar o cartão.",
+              "Could not update the credit card.",
             ),
           );
         }
@@ -211,8 +221,8 @@ export function CreditCardForm({
           caughtError instanceof Error
             ? caughtError.message
             : text(
-                "Não foi possível criar o cartão.",
-                "Could not create the credit card.",
+                "Não foi possível atualizar o cartão.",
+                "Could not update the credit card.",
               );
 
         setError({message});
@@ -222,14 +232,14 @@ export function CreditCardForm({
 
   return (
     <form action={handleSubmit} className="space-y-7">
-      {error && (
+      {error ? (
         <div
           role="alert"
           className="rounded-2xl border border-rose-300/20 bg-rose-300/10 px-4 py-3 text-sm leading-6 text-rose-100"
         >
           {error.message}
         </div>
-      )}
+      ) : null}
 
       <section className="space-y-4">
         <h2 className="text-lg font-semibold text-white">
@@ -248,7 +258,7 @@ export function CreditCardForm({
               required
               minLength={1}
               maxLength={80}
-              placeholder={text("Ex.: Nubank Platinum", "e.g. Nubank Platinum")}
+              defaultValue={card.name}
               className="app-input h-11 rounded-xl bg-white/3 px-3.5 text-sm text-slate-100 placeholder:text-slate-500 focus:bg-white/5"
             />
           </label>
@@ -262,6 +272,7 @@ export function CreditCardForm({
               name="institution"
               type="text"
               maxLength={100}
+              defaultValue={card.institution ?? ""}
               placeholder={text("Ex.: Nubank", "e.g. Nubank")}
               className="app-input h-11 rounded-xl bg-white/3 px-3.5 text-sm text-slate-100 placeholder:text-slate-500 focus:bg-white/5"
             />
@@ -274,7 +285,7 @@ export function CreditCardForm({
 
             <select
               name="brand"
-              defaultValue=""
+              defaultValue={card.brand ?? ""}
               className="app-input h-11 rounded-xl bg-white/3 px-3.5 text-sm text-slate-100 focus:bg-white/5"
             >
               <option value="">{text("Selecione", "Select")}</option>
@@ -318,6 +329,7 @@ export function CreditCardForm({
               inputMode="decimal"
               min="0"
               step="0.01"
+              defaultValue={card.credit_limit ?? ""}
               placeholder={text("Ex.: 5000,00", "e.g. 5000.00")}
               className="app-input h-11 rounded-xl bg-white/3 px-3.5 text-sm text-slate-100 placeholder:text-slate-500 focus:bg-white/5"
             />
@@ -347,7 +359,7 @@ export function CreditCardForm({
 
             <select
               name="closing_day"
-              defaultValue="1"
+              defaultValue={String(card.closing_day)}
               required
               className="app-input h-11 rounded-xl bg-white/3 px-3.5 text-sm text-slate-100 focus:bg-white/5"
             >
@@ -368,7 +380,7 @@ export function CreditCardForm({
 
             <select
               name="due_day"
-              defaultValue="1"
+              defaultValue={String(card.due_day)}
               required
               className="app-input h-11 rounded-xl bg-white/3 px-3.5 text-sm text-slate-100 focus:bg-white/5"
             >
@@ -392,7 +404,7 @@ export function CreditCardForm({
 
             <select
               name="payment_account_id"
-              defaultValue=""
+              defaultValue={card.payment_account_id ?? ""}
               className="app-input h-11 rounded-xl bg-white/3 px-3.5 text-sm text-slate-100 focus:bg-white/5"
             >
               <option value="">
@@ -425,21 +437,30 @@ export function CreditCardForm({
           <input
             name="color"
             type="color"
-            defaultValue="#10B981"
+            defaultValue={card.color || "#10B981"}
             className="h-11 w-full cursor-pointer rounded-xl border border-white/8 bg-white/3 p-1"
           />
         </label>
       </section>
 
-      <div className="flex justify-end border-t border-white/10 pt-5">
+      <div className="flex flex-col-reverse justify-end gap-3 border-t border-white/10 pt-5 sm:flex-row">
+        <button
+          type="button"
+          onClick={() => router.push(`/${locale}/cards`)}
+          disabled={pending}
+          className="inline-flex h-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.035] px-5 text-sm font-semibold text-slate-300 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {text("Cancelar", "Cancel")}
+        </button>
+
         <button
           type="submit"
           disabled={pending}
           className="app-shine inline-flex h-11 items-center justify-center rounded-xl bg-emerald-300 px-5 text-sm font-bold text-emerald-950 shadow-[0_10px_26px_rgba(52,211,153,0.16)] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {pending
-            ? text("Criando cartão...", "Creating card...")
-            : text("Criar cartão", "Create card")}
+            ? text("Salvando alterações...", "Saving changes...")
+            : text("Salvar alterações", "Save changes")}
         </button>
       </div>
     </form>

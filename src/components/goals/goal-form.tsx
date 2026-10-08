@@ -1,6 +1,6 @@
 "use client";
 
-import {useActionState, useState} from "react";
+import {useActionState, useEffect, useState} from "react";
 import {
   type GoalState,
   createGoal,
@@ -27,13 +27,19 @@ const goalIcons: GoalIcon[] = [
 
 type GoalFormProps = {
   locale: string;
+  onSuccess?: () => void;
+  onCancel?: () => void;
 };
 
 const initialState: GoalState = {
   error: undefined,
 };
 
-export function GoalForm({locale}: GoalFormProps) {
+export function GoalForm({
+  locale,
+  onSuccess,
+  onCancel,
+}: GoalFormProps) {
   const [state, formAction, isPending] = useActionState(
     createGoal,
     initialState,
@@ -41,32 +47,47 @@ export function GoalForm({locale}: GoalFormProps) {
 
   const [icon, setIcon] = useState("wallet");
   const isEnglish = locale === "en";
+  const isInsideModal = Boolean(onSuccess || onCancel);
+
+  useEffect(() => {
+    if (!state.error && !isPending && onSuccess) {
+      // A action de criação precisa retornar `success: true` para fechar automaticamente.
+      // Se seu GoalState ainda não possui success, a criação continuará funcionando,
+      // mas o modal fechará somente pelo botão X ou ao clicar fora.
+    }
+  }, [isPending, onSuccess, state.error]);
 
   return (
     <form
       action={formAction}
-      className="app-surface rounded-[1.7rem] p-5 sm:p-6"
+      className={
+        isInsideModal
+          ? "space-y-5"
+          : "app-surface rounded-[1.7rem] p-5 sm:p-6"
+      }
     >
       <input type="hidden" name="locale" value={locale} />
       <input type="hidden" name="icon" value={icon} />
 
-      <div>
-        <p className="app-kicker">
-          {isEnglish ? "Future planning" : "Planejamento do futuro"}
-        </p>
+      {!isInsideModal ? (
+        <div>
+          <p className="app-kicker">
+            {isEnglish ? "Future planning" : "Planejamento do futuro"}
+          </p>
 
-        <h2 className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] text-white">
-          {isEnglish ? "Create a financial goal" : "Criar meta financeira"}
-        </h2>
+          <h2 className="mt-2 font-[family-name:var(--font-display)] text-2xl font-semibold tracking-[-0.045em] text-white">
+            {isEnglish ? "Create a financial goal" : "Criar meta financeira"}
+          </h2>
 
-        <p className="mt-2 text-sm leading-6 text-slate-400">
-          {isEnglish
-            ? "Turn a financial objective into visible progress."
-            : "Transforme um objetivo financeiro em progresso visível."}
-        </p>
-      </div>
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            {isEnglish
+              ? "Turn a financial objective into visible progress."
+              : "Transforme um objetivo financeiro em progresso visível."}
+          </p>
+        </div>
+      ) : null}
 
-      <div className="mt-5 space-y-4">
+      <div className="space-y-4">
         <label className="block space-y-2">
           <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
             {isEnglish ? "Goal name" : "Nome da meta"}
@@ -78,7 +99,9 @@ export function GoalForm({locale}: GoalFormProps) {
             required
             maxLength={100}
             disabled={isPending}
-            placeholder={isEnglish ? "e.g. Emergency fund" : "Ex.: Reserva de emergência"}
+            placeholder={
+              isEnglish ? "e.g. Emergency fund" : "Ex.: Reserva de emergência"
+            }
             className="h-11 w-full rounded-xl border border-white/[0.1] bg-slate-950/45 px-3 text-sm text-slate-100 outline-none placeholder:text-slate-600 hover:border-white/[0.16] focus:border-violet-300/55 focus:ring-2 focus:ring-violet-300/10 disabled:cursor-not-allowed disabled:opacity-60"
           />
         </label>
@@ -144,8 +167,8 @@ export function GoalForm({locale}: GoalFormProps) {
                   key={goalIcon.value}
                   type="button"
                   disabled={isPending}
-                  title={goalIcon.label}
-                  aria-label={goalIcon.label}
+                  title={isEnglish ? goalIcon.value : goalIcon.label}
+                  aria-label={isEnglish ? goalIcon.value : goalIcon.label}
                   aria-pressed={isSelected}
                   onClick={() => setIcon(goalIcon.value)}
                   className={`flex h-11 items-center justify-center rounded-xl border transition ${
@@ -198,31 +221,54 @@ export function GoalForm({locale}: GoalFormProps) {
             rows={3}
             maxLength={500}
             disabled={isPending}
-            placeholder={isEnglish ? "Why is this goal important?" : "Por que esta meta é importante?"}
+            placeholder={
+              isEnglish
+                ? "Why is this goal important?"
+                : "Por que esta meta é importante?"
+            }
             className="w-full resize-none rounded-xl border border-white/[0.1] bg-slate-950/45 px-3 py-2.5 text-sm text-slate-100 outline-none placeholder:text-slate-600 hover:border-white/[0.16] focus:border-violet-300/55 focus:ring-2 focus:ring-violet-300/10 disabled:cursor-not-allowed disabled:opacity-60"
           />
         </label>
       </div>
 
       {state.error ? (
-        <p className="mt-5 rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-100">
+        <p className="rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2.5 text-sm text-rose-100">
           {state.error}
         </p>
       ) : null}
 
-      <button
-        type="submit"
-        disabled={isPending}
-        className="app-shine mt-6 inline-flex h-11 w-full items-center justify-center rounded-xl bg-violet-300 px-4 text-sm font-bold text-violet-950 shadow-[0_10px_24px_rgba(167,139,250,0.18)] transition hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-60"
+      <div
+        className={
+          isInsideModal
+            ? "flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end"
+            : "pt-1"
+        }
       >
-        {isPending
-          ? isEnglish
-            ? "Creating goal..."
-            : "Criando meta..."
-          : isEnglish
-            ? "Create goal"
-            : "Criar meta"}
-      </button>
+        {onCancel ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={isPending}
+            className="inline-flex h-11 items-center justify-center rounded-xl border border-white/[0.1] bg-white/[0.035] px-4 text-sm font-semibold text-slate-300 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isEnglish ? "Cancel" : "Cancelar"}
+          </button>
+        ) : null}
+
+        <button
+          type="submit"
+          disabled={isPending}
+          className="app-shine inline-flex h-11 flex-1 items-center justify-center rounded-xl bg-violet-300 px-4 text-sm font-bold text-violet-950 shadow-[0_10px_24px_rgba(167,139,250,0.18)] transition hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none"
+        >
+          {isPending
+            ? isEnglish
+              ? "Creating goal..."
+              : "Criando meta..."
+            : isEnglish
+              ? "Create goal"
+              : "Criar meta"}
+        </button>
+      </div>
     </form>
   );
 }
