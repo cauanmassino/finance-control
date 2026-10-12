@@ -252,14 +252,14 @@ async function findOrCreateStatement(
 ) {
   const [yearValue, monthValue, dayValue] = transactionDate
     .split("-")
-    .map(Number)
+    .map(Number);
 
-  const year = yearValue!
-  const month = monthValue!
-  const day = dayValue!
+  const year = yearValue!;
+  const month = monthValue!;
+  const day = dayValue!;
 
-  let closingYear = year
-  let closingMonth = month
+  let closingYear = year;
+  let closingMonth = month;
 
   /*
    * Compra feita no próprio dia de fechamento entra na próxima fatura.
@@ -268,19 +268,24 @@ async function findOrCreateStatement(
    * troque "day >= card.closing_day" por "day > card.closing_day".
    */
   if (day >= card.closing_day) {
-    const nextMonth = addMonths(closingYear, closingMonth, 1)
-    closingYear = nextMonth.year
-    closingMonth = nextMonth.month
+    const nextMonth = addMonths(closingYear, closingMonth, 1);
+    closingYear = nextMonth.year;
+    closingMonth = nextMonth.month;
   }
 
   const closingDay = Math.min(
     card.closing_day,
     getLastDayOfMonth(closingYear, closingMonth),
-  )
+  );
 
-  const closingDate = createDateString(closingYear, closingMonth, closingDay)
+  const closingDate = createDateString(closingYear, closingMonth, closingDay);
 
-  const { data: existing, error: existingError } = await supabase
+  /*
+   * Não filtra por status aqui: existe uma restrição única no banco para
+   * (credit_card_id, closing_date). Mesmo se a fatura estiver "paid",
+   * ela precisa ser localizada para evitar uma segunda tentativa de insert.
+   */
+  const {data: existing, error: existingError} = await supabase
     .from("credit_card_statements")
     .select(
       "id, credit_card_id, closing_date, due_date, status, total_amount, paid_amount",
@@ -288,34 +293,38 @@ async function findOrCreateStatement(
     .eq("user_id", userId)
     .eq("credit_card_id", card.id)
     .eq("closing_date", closingDate)
-    .in("status", ["open", "closed", "overdue"])
-    .maybeSingle()
+    .maybeSingle();
 
   if (existingError) {
-    console.error("Erro ao procurar fatura:", existingError)
-    throw new Error("Could not load the credit card statement.")
+    console.error("Erro ao procurar fatura:", existingError);
+    throw new Error("Could not load the credit card statement.");
   }
 
   if (existing) {
-    return existing as StatementRow
+    return existing as StatementRow;
   }
 
-  const dueMonth = addMonths(closingYear, closingMonth, 1)
+  const dueMonth = addMonths(closingYear, closingMonth, 1);
 
   const dueDay = Math.min(
     card.due_day,
     getLastDayOfMonth(dueMonth.year, dueMonth.month),
-  )
+  );
 
-  const dueDate = createDateString(dueMonth.year, dueMonth.month, dueDay)
+  const dueDate = createDateString(dueMonth.year, dueMonth.month, dueDay);
 
-  const periodStartYear = closingMonth === 1 ? closingYear - 1 : closingYear
-  const periodStartMonth = closingMonth === 1 ? 12 : closingMonth - 1
+  const periodStartYear = closingMonth === 1 ? closingYear - 1 : closingYear;
+  const periodStartMonth = closingMonth === 1 ? 12 : closingMonth - 1;
 
-  const periodStart = createDateString(periodStartYear, periodStartMonth, 1)
-  const periodEnd = closingDate
+  const periodStart = createDateString(periodStartYear, periodStartMonth, 1);
+  const periodEnd = closingDate;
 
-  const { data: inserted, error: insertError } = await supabase
+  /*
+   * Caso duas requisições criem um lançamento simultaneamente, ambas podem
+   * não encontrar a fatura inicialmente. A restrição única permite que uma
+   * seja inserida; se a outra receber 23505, ela busca a fatura já criada.
+   */
+  const {data: inserted, error: insertError} = await supabase
     .from("credit_card_statements")
     .insert({
       user_id: userId,
@@ -331,14 +340,38 @@ async function findOrCreateStatement(
     .select(
       "id, credit_card_id, closing_date, due_date, status, total_amount, paid_amount",
     )
-    .single()
+    .single();
 
-  if (insertError || !inserted) {
-    console.error("Erro ao criar fatura:", insertError)
-    throw new Error("Could not create the credit card statement.")
+  if (!insertError && inserted) {
+    return inserted as StatementRow;
   }
 
-  return inserted as StatementRow
+  if (insertError?.code === "23505") {
+    const {data: statementCreatedInParallel, error: parallelLookupError} =
+      await supabase
+        .from("credit_card_statements")
+        .select(
+          "id, credit_card_id, closing_date, due_date, status, total_amount, paid_amount",
+        )
+        .eq("user_id", userId)
+        .eq("credit_card_id", card.id)
+        .eq("closing_date", closingDate)
+        .single();
+
+    if (!parallelLookupError && statementCreatedInParallel) {
+      return statementCreatedInParallel as StatementRow;
+    }
+
+    console.error(
+      "Erro ao recuperar fatura já existente após conflito:",
+      parallelLookupError,
+    );
+
+    throw new Error("Could not find the existing credit card statement.");
+  }
+
+  console.error("Erro ao criar fatura:", insertError);
+  throw new Error("Could not create the credit card statement.");
 }
 
 export async function createTransaction(formData: FormData) {
