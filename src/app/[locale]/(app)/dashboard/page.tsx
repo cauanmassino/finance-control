@@ -3,10 +3,7 @@ import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { CashFlowChart } from "@/components/dashboard/cash-flow-chart"
 import { CategorySpendingChart } from "@/components/dashboard/category-spending-chart"
-import {
-  SpendingSourceChart,
-  type SpendingSource,
-} from "@/components/dashboard/spending-source-chart"
+import { SpendingSourceChart, type SpendingSource } from "@/components/dashboard/spending-source-chart"
 import { CategoryIcon } from "@/components/categories/category-icon"
 import { AlertsSummary } from "@/components/dashboard/alerts-summary"
 
@@ -24,6 +21,7 @@ type Account = {
   id: string
   name: string
   color: string | null
+  initial_balance?: number | string
 }
 
 type Category = {
@@ -31,14 +29,6 @@ type Category = {
   name: string
   color: string | null
   icon: string | null
-}
-
-type CreditCardSource = {
-  id: string
-  name: string
-  institution: string | null
-  brand: string | null
-  last_four: string | null
 }
 
 type RecentTransaction = {
@@ -75,12 +65,6 @@ type CategoryExpenseItem = {
   category: Category[] | Category | null
 }
 
-type SpendingSourceTransaction = {
-  amount: number | string
-  account: Account[] | Account | null
-  credit_card: CreditCardSource[] | CreditCardSource | null
-}
-
 type CategorySpending = {
   id: string
   name: string
@@ -114,15 +98,25 @@ type BudgetSummaryItem = {
 type CreditCardStatement = {
   id: string
   credit_card_id: string
+  closing_date: string
+  due_date: string
   total_amount: number | string
   paid_amount: number | string
   status: "open" | "closed" | "overdue" | "paid"
 }
 
-type CreditCardTransaction = {
+type CreditCardSource = {
   id: string
+  name: string
+  institution: string | null
+  brand: string | null
+  last_four: string | null
+}
+
+type SpendingSourceTransaction = {
   amount: number | string
-  credit_card_statement_id: string | null
+  account: Account[] | Account | null
+  credit_card: CreditCardSource[] | CreditCardSource | null
 }
 
 function getFirstRelation<T>(
@@ -148,15 +142,20 @@ function isValidDateString(value: string | undefined) {
     return false
   }
 
-  return !Number.isNaN(new Date(`${value}T12:00:00`).getTime())
+  const date = new Date(`${value}T12:00:00`)
+
+  return !Number.isNaN(date.getTime())
 }
 
 function getDefaultPeriod() {
   const now = new Date()
 
+  const start = new Date(now.getFullYear(), now.getMonth(), 1)
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+
   return {
-    from: toDateString(new Date(now.getFullYear(), now.getMonth(), 1)),
-    to: toDateString(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+    from: toDateString(start),
+    to: toDateString(end),
   }
 }
 
@@ -167,12 +166,24 @@ function getSelectedPeriod(
   const defaultPeriod = getDefaultPeriod()
 
   const from = isValidDateString(fromValue)
-    ? fromValue!
+    ? fromValue
     : defaultPeriod.from
 
-  const to = isValidDateString(toValue) ? toValue! : defaultPeriod.to
+  const to = isValidDateString(toValue)
+    ? toValue
+    : defaultPeriod.to
 
-  return from <= to ? { from, to } : { from: to, to: from }
+  if (from! <= to!) {
+    return {
+      from: from!,
+      to: to!,
+    }
+  }
+
+  return {
+    from: to!,
+    to: from!,
+  }
 }
 
 function getExclusiveEndDate(dateString: string) {
@@ -185,20 +196,23 @@ function getExclusiveEndDate(dateString: string) {
 function getPreviousMonthPeriod() {
   const now = new Date()
 
+  const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+  const end = new Date(now.getFullYear(), now.getMonth(), 0)
+
   return {
-    from: toDateString(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
-    to: toDateString(new Date(now.getFullYear(), now.getMonth(), 0)),
+    from: toDateString(start),
+    to: toDateString(end),
   }
 }
 
 function getLastThirtyDaysPeriod() {
-  const to = new Date()
-  const from = new Date()
-  from.setDate(from.getDate() - 29)
+  const end = new Date()
+  const start = new Date()
+  start.setDate(start.getDate() - 29)
 
   return {
-    from: toDateString(from),
-    to: toDateString(to),
+    from: toDateString(start),
+    to: toDateString(end),
   }
 }
 
@@ -227,45 +241,44 @@ function formatPeriodLabel(from: string, to: string, locale: string) {
     },
   )
 
-  return `${formatter.format(
-    new Date(`${from}T12:00:00`),
-  )} – ${formatter.format(new Date(`${to}T12:00:00`))}`
+  const fromLabel = formatter.format(new Date(`${from}T12:00:00`))
+  const toLabel = formatter.format(new Date(`${to}T12:00:00`))
+
+  return `${fromLabel} – ${toLabel}`
 }
 
 function getMonthKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
-    2,
-    "0",
-  )}`
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+
+  return `${date.getFullYear()}-${month}`
 }
 
 function getMonthShortLabel(date: Date, locale: string) {
-  return new Intl.DateTimeFormat(
+  const label = new Intl.DateTimeFormat(
     locale === "en" ? "en-US" : "pt-BR",
     {
       month: "short",
     },
-  )
-    .format(date)
-    .replace(".", "")
-    .slice(0, 3)
+  ).format(date)
+
+  return label.replace(".", "").slice(0, 3)
 }
 
 function getMonthsInPeriod(from: string, to: string, locale: string) {
   const start = new Date(`${from}T12:00:00`)
   const end = new Date(`${to}T12:00:00`)
 
-  const firstMonth = new Date(start.getFullYear(), start.getMonth(), 1)
-  const lastMonth = new Date(end.getFullYear(), end.getMonth(), 1)
+  const startMonth = new Date(start.getFullYear(), start.getMonth(), 1)
+  const endMonth = new Date(end.getFullYear(), end.getMonth(), 1)
 
   const months: Array<{
     key: string
     label: string
   }> = []
 
-  let cursor = firstMonth
+  let cursor = startMonth
 
-  while (cursor <= lastMonth) {
+  while (cursor <= endMonth) {
     months.push({
       key: getMonthKey(cursor),
       label: getMonthShortLabel(cursor, locale),
@@ -333,11 +346,11 @@ export default async function DashboardPage({
     { data: spendingSourceData, error: spendingSourceError },
     { data: budgetsData, error: budgetsError },
     { data: creditCardStatements, error: creditCardStatementsError },
-    { data: creditCardTransactions, error: creditCardTransactionsError },
+    { data: cardsData, error: cardsError },
   ] = await Promise.all([
     supabase
       .from("accounts")
-      .select("id, name, color")
+      .select("id, name, color, initial_balance")
       .eq("user_id", user.id)
       .order("name", { ascending: true }),
 
@@ -418,17 +431,9 @@ export default async function DashboardPage({
       .from("transactions")
       .select(`
         amount,
-        account:accounts!transactions_account_id_fkey (
-          id,
-          name,
-          color
-        ),
+        account:accounts!transactions_account_id_fkey (id, name, color),
         credit_card:credit_cards!transactions_credit_card_id_fkey (
-          id,
-          name,
-          institution,
-          brand,
-          last_four
+          id, name, institution, brand, last_four
         )
       `)
       .eq("user_id", user.id)
@@ -453,17 +458,17 @@ export default async function DashboardPage({
 
     supabase
       .from("credit_card_statements")
-      .select("id, credit_card_id, total_amount, paid_amount, status")
+      .select("id, credit_card_id, closing_date, due_date, total_amount, paid_amount, status")
       .eq("user_id", user.id)
-      .in("status", ["open", "closed", "overdue"]),
+      .in("status", ["open", "closed", "overdue"])
+      .order("closing_date", { ascending: false }),
 
     supabase
-      .from("transactions")
-      .select("id, amount, credit_card_statement_id")
+      .from("credit_cards")
+      .select("id, name, institution, brand, last_four")
       .eq("user_id", user.id)
-      .eq("type", "expense")
-      .eq("payment_method", "credit_card")
-      .not("credit_card_id", "is", null),
+      .order("is_active", { ascending: false })
+      .order("name", { ascending: true }),
   ])
 
   const loadError =
@@ -477,7 +482,7 @@ export default async function DashboardPage({
     spendingSourceError ??
     budgetsError ??
     creditCardStatementsError ??
-    creditCardTransactionsError
+    cardsError
 
   if (loadError) {
     console.error("Erro ao carregar dashboard:", {
@@ -489,10 +494,11 @@ export default async function DashboardPage({
   }
 
   const typedAccounts = (accounts ?? []) as Account[]
+
   const typedCreditCardStatements =
     (creditCardStatements ?? []) as CreditCardStatement[]
-  const typedCreditCardTransactions =
-    (creditCardTransactions ?? []) as CreditCardTransaction[]
+
+  const typedCards = (cardsData ?? []) as CreditCardSource[]
 
   const income = (periodTransactions ?? [])
     .filter((transaction) => transaction.type === "income")
@@ -504,69 +510,70 @@ export default async function DashboardPage({
 
   const periodResult = income - expenses
 
-  const accountBalances: AccountBalance[] = typedAccounts.map((account) => {
-    const balance = (allTransactions ?? []).reduce(
-      (total, transaction) => {
-        const amount = Number(transaction.amount)
-
-        if (transaction.type === "income") {
-          return transaction.account_id === account.id
-            ? total + amount
-            : total
-        }
-
-        if (transaction.type === "expense") {
-          return transaction.account_id === account.id
-            ? total - amount
-            : total
-        }
-
-        if (transaction.type === "transfer") {
-          if (transaction.account_id === account.id) {
-            return total - amount
-          }
-
-          if (transaction.transfer_account_id === account.id) {
-            return total + amount
-          }
-        }
-
-        return total
-      },
-      0,
-    )
-
-    return {
-      ...account,
-      balance,
-      share: 0,
+  /*
+   * Saldo de conta e patrimônio são posição ATUAL:
+   * não mudam quando o usuário altera o intervalo de movimentações.
+   */
+  // Mesma regra de accounts/page.tsx, incluindo transferencias para a mesma conta.
+  const balances = new Map<string, number>()
+  typedAccounts.forEach((account) => {
+    balances.set(account.id, Number(account.initial_balance ?? 0))
+  })
+  ;(allTransactions ?? []).forEach((transaction) => {
+    const amount = Number(transaction.amount)
+    const source = transaction.account_id
+    const destination = transaction.transfer_account_id
+    if (transaction.type === "income" && source && balances.has(source)) {
+      balances.set(source, balances.get(source)! + amount)
+    }
+    if (transaction.type === "expense" && source && balances.has(source)) {
+      balances.set(source, balances.get(source)! - amount)
+    }
+    if (transaction.type === "transfer") {
+      if (source && balances.has(source)) {
+        balances.set(source, balances.get(source)! - amount)
+      }
+      if (destination && balances.has(destination)) {
+        balances.set(destination, balances.get(destination)! + amount)
+      }
     }
   })
+  const accountBalances: AccountBalance[] = typedAccounts.map((account) => ({
+    ...account,
+    balance: balances.get(account.id) ?? Number(account.initial_balance ?? 0),
+    share: 0,
+  }))
 
   const totalBalance = accountBalances.reduce(
     (total, account) => total + account.balance,
     0,
   )
 
-  const statementDebt = typedCreditCardStatements.reduce(
-    (total, statement) => {
-      const statementTotal = Number(statement.total_amount ?? 0)
-      const paidAmount = Number(statement.paid_amount ?? 0)
-
-      return total + Math.max(statementTotal - paidAmount, 0)
-    },
+  // Mesma selecao de cards/page.tsx: primeira fatura por cartao,
+  // ordenada por closing_date decrescente, incluindo cartoes pausados.
+  const statementByCardId = new Map<string, CreditCardStatement>()
+  for (const statement of typedCreditCardStatements) {
+    if (!statementByCardId.has(statement.credit_card_id)) {
+      statementByCardId.set(statement.credit_card_id, statement)
+    }
+  }
+  const currentCardStatements = typedCards.map((card) => {
+    const statement = statementByCardId.get(card.id) ?? null
+    const total = Number(statement?.total_amount ?? 0)
+    const paid = Number(statement?.paid_amount ?? 0)
+    return { card, statement, total, paid, outstanding: Math.max(total - paid, 0) }
+  })
+  const totalCreditCardDebt = currentCardStatements.reduce(
+    (total, item) => total + item.outstanding,
     0,
   )
-
-  const unlinkedCreditCardDebt = typedCreditCardTransactions
-    .filter((transaction) => !transaction.credit_card_statement_id)
-    .reduce(
-      (total, transaction) => total + Number(transaction.amount),
-      0,
-    )
-
-  const totalCreditCardDebt = statementDebt + unlinkedCreditCardDebt
   const netWorth = totalBalance - totalCreditCardDebt
+
+  if (accountsError || allTransactionsError || cardsError || creditCardStatementsError) {
+    throw new Error(isEnglish
+      ? "Could not calculate balances and current card statements."
+      : "Não foi possível calcular os saldos e as faturas atuais.")
+  }
 
   const accountBalancesWithShare = accountBalances.map((account) => ({
     ...account,
@@ -576,136 +583,42 @@ export default async function DashboardPage({
         : 0,
   }))
 
-  const shouldShowDailyCashFlow = !periodCrossesMonths
-
-  const getDaysInPeriod = () => {
-    const start = new Date(`${from}T12:00:00`)
+  const cashFlowBuckets: Array<{key: string; label: string; from: string; to: string}> = []
+  if (!periodCrossesMonths) {
     const end = new Date(`${to}T12:00:00`)
-
-    const days: Array<{
-      key: string
-      label: string
-    }> = []
-
-    let cursor = new Date(start)
-
-    while (cursor <= end) {
-      const key = toDateString(cursor)
-
-      days.push({
-        key,
-        label: String(cursor.getDate()),
-      })
-
-      cursor.setDate(cursor.getDate() + 1)
-    }
-
-    return days
-  }
-
-  const shouldGroupCashFlowByWeek = !periodCrossesMonths
-
-  const getWeekBucketsInPeriod = () => {
-    const start = new Date(`${from}T12:00:00`)
-    const end = new Date(`${to}T12:00:00`)
-
-    const buckets: Array<{
-      key: string
-      label: string
-      from: string
-      to: string
-    }> = []
-
+    let cursor = new Date(`${from}T12:00:00`)
     let weekIndex = 1
-    let cursor = new Date(start)
-
     while (cursor <= end) {
-      const bucketStart = new Date(cursor)
       const bucketEnd = new Date(cursor)
-
       bucketEnd.setDate(bucketEnd.getDate() + 6)
-
-      if (bucketEnd > end) {
-        bucketEnd.setTime(end.getTime())
-      }
-
-      buckets.push({
+      if (bucketEnd > end) bucketEnd.setTime(end.getTime())
+      cashFlowBuckets.push({
         key: `week-${weekIndex}`,
         label: isEnglish ? `W${weekIndex}` : `Sem. ${weekIndex}`,
-        from: toDateString(bucketStart),
+        from: toDateString(cursor),
         to: toDateString(bucketEnd),
       })
-
       cursor = new Date(bucketEnd)
       cursor.setDate(cursor.getDate() + 1)
       weekIndex += 1
     }
-
-    return buckets
-  }
-
-  const cashFlowBuckets = shouldGroupCashFlowByWeek
-    ? getWeekBucketsInPeriod()
-    : getMonthsInPeriod(from, to, locale).map((month) => ({
-        key: month.key,
-        label: month.label,
-        from: `${month.key}-01`,
-        to: `${month.key}-31`,
-      }))
-
-  const cashFlowMap = new Map<
-    string,
-    {
-      income: number
-      expense: number
-    }
-  >()
-
-  cashFlowBuckets.forEach((bucket) => {
-    cashFlowMap.set(bucket.key, {
-      income: 0,
-      expense: 0,
+  } else {
+    getMonthsInPeriod(from, to, locale).forEach((month) => {
+      cashFlowBuckets.push({key: month.key, label: month.label, from: `${month.key}-01`, to: `${month.key}-31`})
     })
-  })
-
+  }
+  const cashFlowMap = new Map<string, {income: number; expense: number}>()
+  cashFlowBuckets.forEach((bucket) => cashFlowMap.set(bucket.key, {income: 0, expense: 0}))
   ;((cashFlowData ?? []) as CashFlowItem[]).forEach((transaction) => {
-    const bucket = cashFlowBuckets.find(
-      (item) =>
-        transaction.occurred_on >= item.from &&
-        transaction.occurred_on <= item.to,
-    )
-
-    if (!bucket) {
-      return
-    }
-
-    const values = cashFlowMap.get(bucket.key)
-
-    if (!values) {
-      return
-    }
-
-    if (transaction.type === "income") {
-      values.income += Number(transaction.amount)
-    }
-
-    if (transaction.type === "expense") {
-      values.expense += Number(transaction.amount)
-    }
+    const bucket = cashFlowBuckets.find((item) => transaction.occurred_on >= item.from && transaction.occurred_on <= item.to)
+    if (!bucket) return
+    const values = cashFlowMap.get(bucket.key)!
+    if (transaction.type === "income") values.income += Number(transaction.amount)
+    if (transaction.type === "expense") values.expense += Number(transaction.amount)
   })
-
   const cashFlowPoints: CashFlowPoint[] = cashFlowBuckets.map((bucket) => {
-    const values = cashFlowMap.get(bucket.key) ?? {
-      income: 0,
-      expense: 0,
-    }
-
-    return {
-      label: bucket.label,
-      income: values.income,
-      expense: values.expense,
-      result: values.income - values.expense,
-    }
+    const values = cashFlowMap.get(bucket.key)!
+    return {label: bucket.label, income: values.income, expense: values.expense, result: values.income - values.expense}
   })
 
   const categoryMap = new Map<
@@ -746,80 +659,26 @@ export default async function DashboardPage({
         expenses > 0 ? Math.min((category.amount / expenses) * 100, 100) : 0,
     }))
 
-  const spendingSourceMap = new Map<
-    string,
-    Omit<SpendingSource, "percentage">
-  >()
-
-  ;((spendingSourceData ?? []) as unknown as SpendingSourceTransaction[]).forEach(
-    (transaction) => {
-      const account = getFirstRelation(transaction.account)
-      const creditCard = getFirstRelation(transaction.credit_card)
-      const amount = Number(transaction.amount)
-
-      if (creditCard) {
-        const sourceId = `credit-card-${creditCard.id}`
-
-        const cardDetails = [
-          creditCard.institution,
-          creditCard.brand,
-          creditCard.last_four ? `•••• ${creditCard.last_four}` : null,
-        ]
-          .filter(Boolean)
-          .join(" · ")
-
-        const existing = spendingSourceMap.get(sourceId) ?? {
-          id: sourceId,
-          name: cardDetails
-            ? `${creditCard.name} — ${cardDetails}`
-            : creditCard.name,
-          kind: "credit_card" as const,
-          color: "#fbbf24",
-          amount: 0,
-        }
-
-        existing.amount += amount
-        spendingSourceMap.set(sourceId, existing)
-        return
-      }
-
-      if (account) {
-        const sourceId = `account-${account.id}`
-
-        const existing = spendingSourceMap.get(sourceId) ?? {
-          id: sourceId,
-          name: account.name,
-          kind: "account" as const,
-          color: account.color ?? "#60a5fa",
-          amount: 0,
-        }
-
-        existing.amount += amount
-        spendingSourceMap.set(sourceId, existing)
-        return
-      }
-
-      const existing = spendingSourceMap.get("other") ?? {
-        id: "other",
-        name: isEnglish ? "No source informed" : "Sem origem informada",
-        kind: "other" as const,
-        color: "#94a3b8",
-        amount: 0,
-      }
-
-      existing.amount += amount
-      spendingSourceMap.set("other", existing)
-    },
-  )
-
-  const spendingSources: SpendingSource[] = Array.from(
-    spendingSourceMap.values(),
-  )
+  const spendingSourceMap = new Map<string, Omit<SpendingSource, "percentage">>()
+  ;((spendingSourceData ?? []) as unknown as SpendingSourceTransaction[]).forEach((transaction) => {
+    const account = getFirstRelation(transaction.account)
+    const card = getFirstRelation(transaction.credit_card)
+    const amount = Number(transaction.amount)
+    const id = card ? `credit-card-${card.id}` : account ? `account-${account.id}` : "other"
+    const details = card ? [card.institution, card.brand, card.last_four ? `•••• ${card.last_four}` : null].filter(Boolean).join(" · ") : ""
+    const existing = spendingSourceMap.get(id) ?? {
+      id,
+      name: card ? (details ? `${card.name} — ${details}` : card.name) : account?.name ?? (isEnglish ? "No source informed" : "Sem origem informada"),
+      kind: card ? "credit_card" as const : account ? "account" as const : "other" as const,
+      color: card ? "#fbbf24" : account?.color ?? (account ? "#60a5fa" : "#94a3b8"),
+      amount: 0,
+    }
+    existing.amount += amount
+    spendingSourceMap.set(id, existing)
+  })
+  const spendingSources: SpendingSource[] = Array.from(spendingSourceMap.values())
     .sort((first, second) => second.amount - first.amount)
-    .map((source) => ({
-      ...source,
-      percentage: expenses > 0 ? (source.amount / expenses) * 100 : 0,
-    }))
+    .map((source) => ({...source, percentage: expenses > 0 ? source.amount / expenses * 100 : 0}))
 
   const spentByCategory = new Map<string, number>()
 
@@ -860,7 +719,8 @@ export default async function DashboardPage({
     (total, budget) => total + budget.spent,
     0,
   )
-    const totalBudgetRemaining = totalBudget - totalBudgetSpent
+
+  const totalBudgetRemaining = totalBudget - totalBudgetSpent
 
   const budgetUsagePercentage =
     totalBudget > 0 ? (totalBudgetSpent / totalBudget) * 100 : 0
@@ -979,11 +839,11 @@ export default async function DashboardPage({
             id: "net-worth-alert",
             level: "danger" as const,
             title: isEnglish
-              ? "Your net worth is negative"
-              : "Seu patrimônio líquido está negativo",
+              ? "Balance after current statements is negative"
+              : "O saldo após faturas atuais está negativo",
             description: isEnglish
-              ? "Your debts are greater than the money tracked in your accounts."
-              : "Suas dívidas são maiores que o dinheiro registrado nas suas contas.",
+              ? "Selected current statements exceed the balance tracked in your accounts."
+              : "As faturas atuais selecionadas superam o saldo registrado nas suas contas.",
             href: `/${locale}/cards`,
             iconName: "wallet",
             color: "#fda4af",
@@ -1022,7 +882,7 @@ export default async function DashboardPage({
 
             <div className="mt-7">
               <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-400">
-                {isEnglish ? "Net worth today" : "Patrimônio líquido atual"}
+                {isEnglish ? "Balance after current statements" : "Saldo após faturas atuais"}
               </p>
 
               <p
@@ -1575,6 +1435,43 @@ export default async function DashboardPage({
             </div>
           </div>
         )}
+      </section>
+
+      <section className="app-surface rounded-[1.7rem] p-5 sm:p-6">
+        <details>
+          <summary className="cursor-pointer text-sm font-semibold text-slate-100">
+            {isEnglish ? "See current statement breakdown" : "Ver composição das faturas atuais"}
+            {" · "}{formatCurrency(totalCreditCardDebt, locale)}
+          </summary>
+          <p className="mt-3 text-xs leading-5 text-slate-400">
+            {isEnglish
+              ? "Same statements displayed on Cards: one per card, with the latest closing date among open, closed or overdue statements. Includes paused cards. Not filtered by the selected period. Unlinked purchases and other statements are not added."
+              : "Mesmas faturas exibidas em Cartões: uma por cartão, com o fechamento mais recente entre abertas, fechadas ou vencidas. Inclui cartões pausados. Não é filtrado pelo período selecionado. Compras sem fatura e demais faturas não são somadas."}
+          </p>
+          <div className="mt-4 space-y-3">
+            {currentCardStatements.map(({card, statement, total, paid, outstanding}) => (
+              <div key={card.id} className="rounded-2xl border border-white/10 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm font-semibold text-slate-100">{card.name}</span>
+                  <span className="text-sm font-semibold text-rose-300">{formatCurrency(outstanding, locale)}</span>
+                </div>
+                {statement ? (
+                  <>
+                    <p className="mt-2 text-xs text-slate-400">
+                      {isEnglish ? "Total" : "Total"}: {formatCurrency(total, locale)} · {isEnglish ? "Paid" : "Pago"}: {formatCurrency(paid, locale)}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {isEnglish ? "Closes" : "Fecha"}: {formatDate(statement.closing_date, locale)} · {isEnglish ? "Due" : "Vence"}: {formatDate(statement.due_date, locale)} · {statement.status}
+                    </p>
+                    <Link className="mt-3 inline-flex text-xs font-semibold text-emerald-300" href={`/${locale}/cards/${card.id}/statements/${statement.id}`}>
+                      {isEnglish ? "View statement →" : "Ver fatura →"}
+                    </Link>
+                  </>
+                ) : <p className="mt-2 text-xs text-slate-400">{isEnglish ? "No selected statement" : "Sem fatura selecionada"}</p>}
+              </div>
+            ))}
+          </div>
+        </details>
       </section>
 
       <AlertsSummary alerts={dashboardAlerts} locale={locale} />

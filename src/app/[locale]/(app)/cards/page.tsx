@@ -57,7 +57,11 @@ function getStatusLabel(
     overdue: isEnglish ? "Overdue" : "Vencida",
   };
 
-  return status ? labels[status] : isEnglish ? "No statement" : "Sem fatura";
+  return status
+    ? labels[status]
+    : isEnglish
+      ? "No statement"
+      : "Sem fatura";
 }
 
 function getStatusClass(status: Statement["status"] | null) {
@@ -125,40 +129,43 @@ export default async function CardsPage({params}: PageProps) {
     redirect(`/${locale}/auth/login`);
   }
 
-  const [{data: cards, error: cardsError}, {data: statements, error: statementsError}] =
-    await Promise.all([
-      supabase
-        .from("credit_cards")
-        .select(`
-          id,
-          name,
-          institution,
-          brand,
-          last_four,
-          credit_limit,
-          closing_day,
-          due_day,
-          color,
-          is_active
-        `)
-        .eq("user_id", user.id)
-        .order("is_active", {ascending: false})
-        .order("name", {ascending: true}),
-      supabase
-        .from("credit_card_statements")
-        .select(`
-          id,
-          credit_card_id,
-          due_date,
-          closing_date,
-          status,
-          total_amount,
-          paid_amount
-        `)
-        .eq("user_id", user.id)
-        .in("status", ["open", "closed", "overdue"])
-        .order("closing_date", {ascending: false}),
-    ]);
+  const [
+    {data: cards, error: cardsError},
+    {data: statements, error: statementsError},
+  ] = await Promise.all([
+    supabase
+      .from("credit_cards")
+      .select(`
+        id,
+        name,
+        institution,
+        brand,
+        last_four,
+        credit_limit,
+        closing_day,
+        due_day,
+        color,
+        is_active
+      `)
+      .eq("user_id", user.id)
+      .order("is_active", {ascending: false})
+      .order("name", {ascending: true}),
+
+    supabase
+      .from("credit_card_statements")
+      .select(`
+        id,
+        credit_card_id,
+        due_date,
+        closing_date,
+        status,
+        total_amount,
+        paid_amount
+      `)
+      .eq("user_id", user.id)
+      .in("status", ["open", "closed", "overdue"])
+      .order("closing_date", {ascending: false}),
+  ]);
 
   if (cardsError) {
     console.error("Erro ao carregar cartões:", cardsError);
@@ -198,7 +205,10 @@ export default async function CardsPage({params}: PageProps) {
     return total + Math.max(amount - paid, 0);
   }, 0);
 
-  const totalAvailable = Math.max(totalCreditLimit - totalOutstanding, 0);
+  const totalAvailable = Math.max(
+    totalCreditLimit - totalOutstanding,
+    0,
+  );
 
   const activeCardsCount = typedCards.filter(
     (card) => card.is_active,
@@ -224,7 +234,9 @@ export default async function CardsPage({params}: PageProps) {
             </p>
 
             <h1 className="mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] text-white sm:text-4xl lg:text-5xl">
-              {isEnglish ? "Your cards, simplified." : "Seus cartões, mais simples."}
+              {isEnglish
+                ? "Your cards, simplified."
+                : "Seus cartões, mais simples."}
             </h1>
 
             <p className="mt-3 max-w-xl text-sm leading-6 text-slate-300 sm:text-base">
@@ -323,6 +335,7 @@ export default async function CardsPage({params}: PageProps) {
             const paidAmount = Number(statement?.paid_amount ?? 0);
             const outstanding = Math.max(totalAmount - paidAmount, 0);
             const available = Math.max(creditLimit - outstanding, 0);
+
             const usedPercentage =
               creditLimit > 0
                 ? Math.min((outstanding / creditLimit) * 100, 100)
@@ -330,6 +343,7 @@ export default async function CardsPage({params}: PageProps) {
 
             const cardColor = card.color || "#10B981";
             const cardTextColor = getTextColor(cardColor);
+
             const mutedCardTextColor =
               cardTextColor === "#ffffff"
                 ? "rgba(255,255,255,0.68)"
@@ -424,7 +438,9 @@ export default async function CardsPage({params}: PageProps) {
 
                       <span
                         aria-label={
-                          isEnglish ? "Contactless payment" : "Pagamento por aproximação"
+                          isEnglish
+                            ? "Contactless payment"
+                            : "Pagamento por aproximação"
                         }
                         className="rotate-90 text-xl font-light tracking-[-0.3em] opacity-80"
                       >
@@ -548,12 +564,16 @@ export default async function CardsPage({params}: PageProps) {
                 <div className="mt-5 flex items-center justify-between border-t border-white/8 pt-4 text-xs text-slate-400">
                   <span>
                     {isEnglish ? "Closes on day" : "Fecha dia"}{" "}
-                    <strong className="text-slate-200">{card.closing_day}</strong>
+                    <strong className="text-slate-200">
+                      {card.closing_day}
+                    </strong>
                   </span>
 
                   <span>
                     {isEnglish ? "Due on day" : "Vence dia"}{" "}
-                    <strong className="text-slate-200">{card.due_day}</strong>
+                    <strong className="text-slate-200">
+                      {card.due_day}
+                    </strong>
                   </span>
                 </div>
 
