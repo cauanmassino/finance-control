@@ -14,7 +14,7 @@ import {FinancialHealthPeriodFilter} from "@/components/financial-health/financi
 export const metadata: Metadata = {
   title: "Saúde financeira",
   description:
-    "Acompanhe seu patrimônio, evolução de despesas e comportamento financeiro.",
+    "Acompanhe os saldos das suas contas, evolução de despesas e comportamento financeiro.",
 };
 
 type PeriodValue = "3" | "6" | "12" | "all";
@@ -31,6 +31,7 @@ type Account = {
   name: string;
   color: string | null;
   initial_balance: number | string | null;
+  created_at: string;
 };
 
 type Category = {
@@ -45,6 +46,7 @@ type Transaction = {
   description: string;
   amount: number | string;
   type: "income" | "expense" | "transfer";
+  status: string | null;
   occurred_on: string;
   account_id: string | null;
   transfer_account_id: string | null;
@@ -72,16 +74,12 @@ type Budget = {
 type CreditCardStatement = {
   id: string;
   credit_card_id: string;
-  period_start: string;
-  period_end: string;
-  closing_date: string;
-  due_date: string;
   total_amount: number | string;
   paid_amount: number | string;
   status: "open" | "closed" | "overdue" | "paid";
 };
 
-type NetWorthPoint = {
+type AccountBalancePoint = {
   label: string;
   value: number;
   isCurrent?: boolean;
@@ -139,9 +137,7 @@ function getMonthShortLabel(date: Date, locale: string) {
     .slice(0, 3);
 }
 
-function getLastMonths(count: number, locale: string) {
-  const now = new Date();
-
+function getLastMonths(count: number, locale: string, now: Date) {
   return Array.from({length: count}, (_, index) => {
     const date = new Date(
       now.getFullYear(),
@@ -180,51 +176,76 @@ function normalizeDescription(value: string) {
   return value.toLowerCase().trim().replace(/\s+/g, " ");
 }
 
+function isCreditCardExpense(transaction: Transaction) {
+  return (
+    transaction.type === "expense" &&
+    (
+      Boolean(transaction.credit_card_id) ||
+      transaction.payment_method === "credit_card" ||
+      transaction.payment_method === "card"
+    )
+  );
+}
+
+/*
+ * Saldo inicial + movimentações efetivadas antes da data de corte.
+ * Compras no crédito não debitam a conta.
+ * Pagamentos de fatura devem estar registrados como saída bancária.
+ */
 function calculateAccountBalanceAtDate(
   account: Account,
   transactions: Transaction[],
   endDateExclusive: string,
+  historyStartDate: string,
 ) {
+  if (historyStartDate >= endDateExclusive) {
+    return 0;
+  }
+
   return transactions.reduce((total, transaction) => {
-    if (transaction.occurred_on >= endDateExclusive) {
+    if (
+      transaction.occurred_on >= endDateExclusive ||
+      transaction.status === "pending" ||
+      isCreditCardExpense(transaction)
+    ) {
       return total;
     }
 
     const amount = Number(transaction.amount);
 
     if (transaction.type === "income") {
-      return transaction.account_id === account.id ? total + amount : total;
+      return transaction.account_id === account.id
+        ? total + amount
+        : total;
     }
 
     if (transaction.type === "expense") {
-      return transaction.account_id === account.id ? total - amount : total;
+      return transaction.account_id === account.id
+        ? total - amount
+        : total;
     }
 
-    if (transaction.account_id === account.id) {
-      return total - amount;
-    }
+    if (transaction.type === "transfer") {
+      let nextBalance = total;
 
-    if (transaction.transfer_account_id === account.id) {
-      return total + amount;
+      if (transaction.account_id === account.id) {
+        nextBalance -= amount;
+      }
+
+      if (transaction.transfer_account_id === account.id) {
+        nextBalance += amount;
+      }
+
+      return nextBalance;
     }
 
     return total;
   }, Number(account.initial_balance ?? 0));
 }
 
-function getCurrentAccountBalance(
-  account: Account,
-  transactions: Transaction[],
-) {
-  return calculateAccountBalanceAtDate(account, transactions, "9999-12-31");
-}
-
 /*
- * Para o patrimônio atual, a dívida é a soma das faturas ainda pendentes:
- *
- * total_amount - paid_amount
- *
- * Faturas pagas não entram como passivo.
+ * Mantido somente para a base da previsão de fluxo de caixa existente.
+ * Não participa do indicador nem do histórico de saldo em contas.
  */
 function calculateCurrentCreditCardDebt(
   statements: CreditCardStatement[],
@@ -239,39 +260,6 @@ function calculateCurrentCreditCardDebt(
 
       return total + Math.max(totalAmount - paidAmount, 0);
     }, 0);
-}
-
-/*
- * Para o gráfico histórico, usamos as compras no cartão realizadas antes
- * do fim de cada mês. Isso faz uma compra no crédito reduzir o patrimônio
- * no dia em que foi feita, e não apenas no dia de pagamento da fatura.
- *
- * A coluna payment_method pode conter "card" em dados antigos ou
- * "credit_card" em lançamentos atuais, por isso aceitamos os dois.
- */
-function calculateCreditCardDebtAtDate(
-  transactions: Transaction[],
-  endDateExclusive: string,
-) {
-  return transactions.reduce((total, transaction) => {
-    const isCreditCardExpense =
-      transaction.type === "expense" &&
-      Boolean(transaction.credit_card_id) &&
-      (
-        transaction.payment_method === "credit_card" ||
-        transaction.payment_method === "card"
-      );
-
-    if (!isCreditCardExpense) {
-      return total;
-    }
-
-    if (transaction.occurred_on >= endDateExclusive) {
-      return total;
-    }
-
-    return total + Number(transaction.amount);
-  }, 0);
 }
 
 export default async function FinancialHealthPage({
@@ -302,6 +290,12 @@ export default async function FinancialHealthPage({
   }
 
   const now = new Date();
+  const todayText = toDateString(now);
+
+  const tomorrowText = toDateString(
+    new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1),
+  );
+
   const currentMonthStart = getMonthStart(now);
   const currentMonthEnd = getNextMonthStart(now);
   const currentMonthStartText = toDateString(currentMonthStart);
@@ -316,7 +310,7 @@ export default async function FinancialHealthPage({
   ] = await Promise.all([
     supabase
       .from("accounts")
-      .select("id, name, color, initial_balance")
+      .select("id, name, color, initial_balance, created_at")
       .eq("user_id", user.id)
       .order("name", {ascending: true}),
 
@@ -327,6 +321,7 @@ export default async function FinancialHealthPage({
         description,
         amount,
         type,
+        status,
         occurred_on,
         account_id,
         transfer_account_id,
@@ -357,18 +352,11 @@ export default async function FinancialHealthPage({
       .eq("user_id", user.id)
       .eq("month", currentMonthStartText),
 
-    /*
-     * Faturas abertas, fechadas ou vencidas ainda representam uma dívida.
-     */
     supabase
       .from("credit_card_statements")
       .select(`
         id,
         credit_card_id,
-        period_start,
-        period_end,
-        closing_date,
-        due_date,
         total_amount,
         paid_amount,
         status
@@ -400,27 +388,58 @@ export default async function FinancialHealthPage({
   const creditCardStatements =
     (creditCardStatementsData ?? []) as CreditCardStatement[];
 
-  const earliestTransactionDate = transactions[0]?.occurred_on ?? null;
+  /*
+   * Sem uma data própria para o saldo inicial, o início do histórico
+   * é aproximado pela criação da conta ou primeira movimentação retroativa.
+   */
+  const accountHistoryStart = new Map<string, string>();
 
-  const allTimeMonthCount = earliestTransactionDate
-    ? Math.max(
-        (now.getFullYear() - Number(earliestTransactionDate.slice(0, 4))) *
-          12 +
-          (
-            now.getMonth() -
-            (Number(earliestTransactionDate.slice(5, 7)) - 1)
-          ) +
-          1,
-        1,
-      )
-    : 1;
+  for (const account of accounts) {
+    let startDate = account.created_at.slice(0, 10);
+
+    for (const transaction of transactions) {
+      const belongsToAccount =
+        transaction.account_id === account.id ||
+        transaction.transfer_account_id === account.id;
+
+      if (
+        belongsToAccount &&
+        !isCreditCardExpense(transaction) &&
+        transaction.status !== "pending" &&
+        transaction.occurred_on < startDate
+      ) {
+        startDate = transaction.occurred_on;
+      }
+    }
+
+    accountHistoryStart.set(account.id, startDate);
+  }
+
+  const availableHistoryDates = [
+    ...accountHistoryStart.values(),
+    ...transactions
+      .filter((transaction) => transaction.occurred_on <= todayText)
+      .map((transaction) => transaction.occurred_on),
+  ]
+    .filter((date) => date <= todayText)
+    .sort();
+
+  const earliestHistoryDate = availableHistoryDates[0] ?? todayText;
+
+  const allTimeMonthCount = Math.max(
+    (now.getFullYear() - Number(earliestHistoryDate.slice(0, 4))) * 12 +
+      now.getMonth() -
+      (Number(earliestHistoryDate.slice(5, 7)) - 1) +
+      1,
+    1,
+  );
 
   const visibleMonthCount =
     selectedPeriod === "all"
       ? allTimeMonthCount
       : Number(selectedPeriod);
 
-  const months = getLastMonths(visibleMonthCount, locale);
+  const months = getLastMonths(visibleMonthCount, locale, now);
 
   const periodLabel =
     selectedPeriod === "all"
@@ -444,71 +463,70 @@ export default async function FinancialHealthPage({
     };
   });
 
-  /*
-   * Saldo total mantido em contas. Compras no cartão não alteram este valor.
-   */
-  const currentAccountBalance = accounts.reduce(
-    (total, account) =>
-      total + getCurrentAccountBalance(account, transactions),
-    0,
-  );
-
-  /*
-   * Dívida atual de cartão. É o passivo que reduz o patrimônio.
-   */
-  const totalCreditCardDebt = calculateCurrentCreditCardDebt(
-    creditCardStatements,
-  );
-
-  /*
-   * Patrimônio líquido verdadeiro:
-   *
-   * ativos em contas - dívida pendente dos cartões.
-   */
-  const currentNetWorth =
-    currentAccountBalance - totalCreditCardDebt;
-
-  const netWorthHistory: NetWorthPoint[] = months.map((month) => {
-    const accountBalanceAtMonthEnd = accounts.reduce(
+  function getAccountsBalanceAtDate(endDateExclusive: string) {
+    return accounts.reduce(
       (total, account) =>
         total +
         calculateAccountBalanceAtDate(
           account,
           transactions,
-          month.end,
+          endDateExclusive,
+          accountHistoryStart.get(account.id) ?? todayText,
         ),
       0,
     );
-
-    const creditCardDebtAtMonthEnd = calculateCreditCardDebtAtDate(
-      transactions,
-      month.end,
-    );
-
-    return {
-      label: month.label,
-      value: accountBalanceAtMonthEnd - creditCardDebtAtMonthEnd,
-      isCurrent: month.isCurrent,
-    };
-  });
-
-  if (netWorthHistory.length > 0) {
-    netWorthHistory[netWorthHistory.length - 1] = {
-      ...netWorthHistory[netWorthHistory.length - 1],
-      value: currentNetWorth,
-      isCurrent: true,
-    };
   }
 
-  const previousNetWorth =
-    netWorthHistory.at(-2)?.value ?? currentNetWorth;
+  /*
+   * Indicador principal: somente a soma dos saldos das contas até hoje.
+   * Não inclui investimentos externos nem desconta faturas.
+   */
+  const currentAccountBalance = getAccountsBalanceAtDate(tomorrowText);
 
-  const netWorthChange = currentNetWorth - previousNetWorth;
+  const previousAccountBalance =
+    getAccountsBalanceAtDate(currentMonthStartText);
 
-  const netWorthChangePercentage =
-    previousNetWorth !== 0
-      ? (netWorthChange / Math.abs(previousNetWorth)) * 100
+  const accountBalanceChange =
+    currentAccountBalance - previousAccountBalance;
+
+  const accountBalanceChangePercentage =
+    previousAccountBalance !== 0
+      ? (accountBalanceChange / Math.abs(previousAccountBalance)) * 100
       : 0;
+
+  const hasPreviousAccountHistory = Array.from(
+    accountHistoryStart.values(),
+  ).some((date) => date < currentMonthStartText);
+
+  /*
+   * Histórico de saldo em contas.
+   * O último ponto e o indicador principal usam o mesmo cálculo.
+   */
+  const accountBalanceHistory: AccountBalancePoint[] =
+    accounts.length === 0
+      ? []
+      : months
+          .filter(
+            (month) => month.key >= earliestHistoryDate.slice(0, 7),
+          )
+          .map((month) => ({
+            label: month.label,
+            value: getAccountsBalanceAtDate(
+              month.isCurrent ? tomorrowText : month.end,
+            ),
+            isCurrent: month.isCurrent,
+          }));
+
+  /*
+   * Base anterior da previsão preservada.
+   * Esta variável não é utilizada no indicador de saldo em contas.
+   */
+  const totalCreditCardDebt = calculateCurrentCreditCardDebt(
+    creditCardStatements,
+  );
+
+  const forecastBaseBalance =
+    currentAccountBalance - totalCreditCardDebt;
 
   const expenseTrend: ExpenseTrendPoint[] = months.map((month) => ({
     label: month.label,
@@ -713,7 +731,7 @@ export default async function FinancialHealthPage({
     )
     .slice(0, 12);
 
-  let projectedBalance = currentNetWorth;
+  let projectedBalance = forecastBaseBalance;
 
   const cashFlowForecastItems = forecastItems.map((item) => {
     const amount = Number(item.amount);
@@ -732,7 +750,7 @@ export default async function FinancialHealthPage({
 
   return (
     <main className="space-y-6 lg:space-y-8">
-      <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-gradient-to-br from-slate-900/90 via-slate-900/74 to-cyan-950/30 px-5 py-6 shadow-[0_30px_80px_rgba(0,0,0,0.28)] sm:px-7 sm:py-8 lg:px-9 lg:py-10">
+      <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-linear-to-br from-slate-900/90 via-slate-900/74 to-cyan-950/30 px-5 py-6 shadow-[0_30px_80px_rgba(0,0,0,0.28)] sm:px-7 sm:py-8 lg:px-9 lg:py-10">
         <div
           aria-hidden="true"
           className="pointer-events-none absolute -right-24 -top-28 h-72 w-72 rounded-full bg-cyan-400/15 blur-3xl"
@@ -749,7 +767,7 @@ export default async function FinancialHealthPage({
               {isEnglish ? "Financial intelligence" : "Inteligência financeira"}
             </p>
 
-            <h1 className="mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] text-white sm:text-4xl lg:text-5xl">
+            <h1 className="mt-3 font-(family-name:--font-display) text-3xl font-semibold tracking-[-0.055em] text-white sm:text-4xl lg:text-5xl">
               {isEnglish
                 ? "Understand the health of your money."
                 : "Entenda a saúde do seu dinheiro."}
@@ -757,8 +775,8 @@ export default async function FinancialHealthPage({
 
             <p className="mt-3 max-w-xl text-sm leading-6 text-slate-300 sm:text-base">
               {isEnglish
-                ? "Track your net worth, spending patterns, and the decisions that shape your financial future."
-                : "Acompanhe seu patrimônio, padrões de gasto e as decisões que moldam seu futuro financeiro."}
+                ? "Track your account balances, spending patterns, and the decisions that shape your financial future."
+                : "Acompanhe os saldos das suas contas, padrões de gasto e as decisões que moldam seu futuro financeiro."}
             </p>
           </div>
 
@@ -772,7 +790,7 @@ export default async function FinancialHealthPage({
         </div>
       </section>
 
-      <section className="flex flex-col gap-3 rounded-[1.7rem] border border-white/[0.08] bg-white/[0.025] p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+      <section className="flex flex-col gap-3 rounded-[1.7rem] border border-white/8 bg-white/2.5 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div>
           <p className="text-sm font-semibold text-slate-100">
             {isEnglish ? "Analysis period" : "Período de análise"}
@@ -792,37 +810,53 @@ export default async function FinancialHealthPage({
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <article className="app-surface app-surface-hover rounded-3xl p-5 sm:p-6">
           <p className="text-sm font-medium text-slate-400">
-            {isEnglish ? "Net worth" : "Patrimônio líquido"}
+            {isEnglish ? "Total account balance" : "Saldo total em contas"}
           </p>
 
           <p
-            className={`mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] ${
-              currentNetWorth >= 0 ? "text-slate-100" : "text-rose-300"
+            className={`mt-3 font-(family-name:--font-display) text-3xl font-semibold tracking-[-0.055em] ${
+              currentAccountBalance >= 0
+                ? "text-slate-100"
+                : "text-rose-300"
             }`}
           >
-            {formatCurrency(currentNetWorth, locale)}
+            {formatCurrency(currentAccountBalance, locale)}
           </p>
 
-          <p
-            className={`mt-5 text-xs font-semibold ${
-              netWorthChange >= 0
-                ? "text-emerald-200"
-                : "text-rose-200"
-            }`}
-          >
-            {netWorthChange >= 0 ? "+" : ""}
-            {formatCurrency(netWorthChange, locale)}
-            {previousNetWorth !== 0
-              ? ` (${
-                  netWorthChange >= 0 ? "+" : ""
-                }${netWorthChangePercentage.toFixed(1)}%)`
-              : ""}
-          </p>
+          {hasPreviousAccountHistory ? (
+            <>
+              <p
+                className={`mt-5 text-xs font-semibold ${
+                  accountBalanceChange >= 0
+                    ? "text-emerald-200"
+                    : "text-rose-200"
+                }`}
+              >
+                {accountBalanceChange >= 0 ? "+" : ""}
+                {formatCurrency(accountBalanceChange, locale)}
+                {previousAccountBalance !== 0
+                  ? ` (${accountBalanceChange >= 0 ? "+" : ""}${accountBalanceChangePercentage.toFixed(1)}%)`
+                  : ""}
+              </p>
 
-          <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-slate-500">
+                {isEnglish
+                  ? "Compared with the previous month's closing balance."
+                  : "Em comparação ao saldo de fechamento do mês anterior."}
+              </p>
+            </>
+          ) : (
+            <p className="mt-5 text-xs text-slate-500">
+              {isEnglish
+                ? "No previous account history available for comparison."
+                : "Sem histórico anterior de contas para comparação."}
+            </p>
+          )}
+
+          <p className="mt-2 text-xs text-slate-500">
             {isEnglish
-              ? "Compared with the previous month."
-              : "Em comparação ao mês anterior."}
+              ? "Sum of your account balances. Credit card statements are not deducted."
+              : "Soma dos saldos das suas contas. Faturas de cartão não são descontadas."}
           </p>
         </article>
 
@@ -832,7 +866,7 @@ export default async function FinancialHealthPage({
           </p>
 
           <p
-            className={`mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] ${
+            className={`mt-3 font-(family-name:--font-display) text-3xl font-semibold tracking-[-0.055em] ${
               currentMonthResult >= 0
                 ? "text-emerald-200"
                 : "text-rose-300"
@@ -844,20 +878,8 @@ export default async function FinancialHealthPage({
 
           <p className="mt-5 text-xs text-slate-400">
             {isEnglish
-              ? `${formatCurrency(
-                  currentIncome,
-                  locale,
-                )} in income and ${formatCurrency(
-                  currentExpenses,
-                  locale,
-                )} in expenses.`
-              : `${formatCurrency(
-                  currentIncome,
-                  locale,
-                )} em receitas e ${formatCurrency(
-                  currentExpenses,
-                  locale,
-                )} em despesas.`}
+              ? `${formatCurrency(currentIncome, locale)} in income and ${formatCurrency(currentExpenses, locale)} in expenses.`
+              : `${formatCurrency(currentIncome, locale)} em receitas e ${formatCurrency(currentExpenses, locale)} em despesas.`}
           </p>
         </article>
 
@@ -867,7 +889,7 @@ export default async function FinancialHealthPage({
           </p>
 
           <p
-            className={`mt-3 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] ${
+            className={`mt-3 font-(family-name:--font-display) text-3xl font-semibold tracking-[-0.055em] ${
               savingsRate >= 20
                 ? "text-emerald-200"
                 : savingsRate > 0
@@ -894,25 +916,15 @@ export default async function FinancialHealthPage({
             {isEnglish ? "Largest expense" : "Maior gasto"}
           </p>
 
-          <p className="mt-3 truncate font-[family-name:var(--font-display)] text-3xl font-semibold tracking-[-0.055em] text-slate-100">
+          <p className="mt-3 truncate font-(family-name:--font-display) text-3xl font-semibold tracking-[-0.055em] text-slate-100">
             {biggestCategory?.name ?? "—"}
           </p>
 
           <p className="mt-5 text-xs text-slate-400">
             {biggestCategory
               ? isEnglish
-                ? `${formatCurrency(
-                    biggestCategory.amount,
-                    locale,
-                  )} · ${biggestCategory.percentage.toFixed(
-                    1,
-                  )}% of this month's expenses.`
-                : `${formatCurrency(
-                    biggestCategory.amount,
-                    locale,
-                  )} · ${biggestCategory.percentage.toFixed(
-                    1,
-                  )}% das despesas deste mês.`
+                ? `${formatCurrency(biggestCategory.amount, locale)} · ${biggestCategory.percentage.toFixed(1)}% of this month's expenses.`
+                : `${formatCurrency(biggestCategory.amount, locale)} · ${biggestCategory.percentage.toFixed(1)}% das despesas deste mês.`
               : isEnglish
                 ? "No categorized expenses this month."
                 : "Não há despesas categorizadas neste mês."}
@@ -920,7 +932,7 @@ export default async function FinancialHealthPage({
         </article>
       </section>
 
-      <section className="rounded-[1.7rem] border border-cyan-300/15 bg-gradient-to-r from-cyan-300/[0.09] via-slate-900/30 to-emerald-300/[0.07] p-5 sm:p-6">
+      <section className="rounded-[1.7rem] border border-cyan-300/15 bg-linear-to-r from-cyan-300/9 via-slate-900/30 to-emerald-300/7 p-5 sm:p-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10 text-xl text-cyan-100">
             ✦
@@ -938,14 +950,22 @@ export default async function FinancialHealthPage({
 
           <Link
             href={`/${locale}/alerts`}
-            className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05] px-4 text-xs font-bold text-slate-200 transition hover:bg-white/[0.1] hover:text-white"
+            className="inline-flex h-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 text-xs font-bold text-slate-200 transition hover:bg-white/10 hover:text-white"
           >
             {isEnglish ? "View alerts" : "Ver alertas"} →
           </Link>
         </div>
       </section>
 
-      <NetWorthChart data={netWorthHistory} locale={locale} />
+      <div className="space-y-3">
+        <NetWorthChart data={accountBalanceHistory} locale={locale} />
+
+        <p className="px-1 text-xs leading-5 text-slate-500">
+          {isEnglish
+            ? "This history combines account balances, including opening balances. Credit card statements are not deducted. Previous months are reconstructed from recorded transactions and an estimated opening date; changes to opening balances affect the reconstruction."
+            : "Este histórico soma os saldos das contas, incluindo os saldos iniciais. Faturas não são descontadas. Os meses anteriores são reconstruídos pelos lançamentos cadastrados e por uma data inicial estimada; alterações no saldo inicial afetam essa reconstrução."}
+        </p>
+      </div>
 
       <section className="grid gap-5 xl:grid-cols-[1.12fr_0.88fr]">
         <ExpenseTrendChart
@@ -975,7 +995,7 @@ export default async function FinancialHealthPage({
       <SpendingFrequencyInsight data={spendingPatterns} locale={locale} />
 
       <CashFlowForecast
-        currentBalance={currentNetWorth}
+        currentBalance={forecastBaseBalance}
         items={cashFlowForecastItems}
         locale={locale}
       />
@@ -987,7 +1007,7 @@ export default async function FinancialHealthPage({
               {isEnglish ? "Next improvement" : "Próxima melhoria"}
             </p>
 
-            <h2 className="mt-2 font-[family-name:var(--font-display)] text-xl font-semibold tracking-[-0.04em] text-white">
+            <h2 className="mt-2 font-(family-name:--font-display) text-xl font-semibold tracking-[-0.04em] text-white">
               {isEnglish
                 ? "Build a clearer financial future"
                 : "Construa um futuro financeiro mais claro"}
@@ -1003,7 +1023,7 @@ export default async function FinancialHealthPage({
           <div className="flex shrink-0 flex-wrap gap-3">
             <Link
               href={`/${locale}/categories`}
-              className="inline-flex h-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.045] px-4 text-xs font-bold text-slate-300 transition hover:bg-white/[0.09] hover:text-white"
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-white/10 bg-white/4.5 px-4 text-xs font-bold text-slate-300 transition hover:bg-white/9 hover:text-white"
             >
               {isEnglish ? "Manage categories" : "Gerenciar categorias"}
             </Link>
