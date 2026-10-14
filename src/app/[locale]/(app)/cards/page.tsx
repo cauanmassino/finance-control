@@ -114,6 +114,13 @@ function getTextColor(color: string) {
   return luminance > 0.65 ? "#08111f" : "#ffffff";
 }
 
+function getOutstandingAmount(statement: Statement | null | undefined) {
+  const totalAmount = Number(statement?.total_amount ?? 0);
+  const paidAmount = Number(statement?.paid_amount ?? 0);
+
+  return Math.max(totalAmount - paidAmount, 0);
+}
+
 export default async function CardsPage({params}: PageProps) {
   const {locale: requestedLocale} = await params;
   const locale = requestedLocale === "en" ? "en" : "pt";
@@ -164,7 +171,9 @@ export default async function CardsPage({params}: PageProps) {
       `)
       .eq("user_id", user.id)
       .in("status", ["open", "closed", "overdue"])
-      .order("closing_date", {ascending: false}),
+      .order("due_date", {ascending: true})
+      .order("closing_date", {ascending: true})
+      .order("id", {ascending: true}),
   ]);
 
   if (cardsError) {
@@ -178,7 +187,13 @@ export default async function CardsPage({params}: PageProps) {
   }
 
   if (statementsError) {
-    console.error("Erro ao carregar faturas (ignorado):", statementsError);
+    console.error("Erro ao carregar faturas:", statementsError);
+
+    throw new Error(
+      isEnglish
+        ? "Could not load your credit card statements."
+        : "Não foi possível carregar as faturas dos cartões.",
+    );
   }
 
   const typedCards = (cards ?? []) as CreditCard[];
@@ -186,7 +201,15 @@ export default async function CardsPage({params}: PageProps) {
 
   const statementByCardId = new Map<string, Statement>();
 
+  // A consulta já está ordenada pelo vencimento mais próximo.
+  // Seleciona somente a primeira fatura com saldo restante de cada cartão.
   for (const statement of typedStatements) {
+    const outstanding = getOutstandingAmount(statement);
+
+    if (outstanding <= 0) {
+      continue;
+    }
+
     if (!statementByCardId.has(statement.credit_card_id)) {
       statementByCardId.set(statement.credit_card_id, statement);
     }
@@ -197,13 +220,12 @@ export default async function CardsPage({params}: PageProps) {
     0,
   );
 
-  const totalOutstanding = typedCards.reduce((total, card) => {
-    const statement = statementByCardId.get(card.id);
-    const amount = Number(statement?.total_amount ?? 0);
-    const paid = Number(statement?.paid_amount ?? 0);
-
-    return total + Math.max(amount - paid, 0);
-  }, 0);
+  // Mantém a regra de somar uma fatura selecionada por cartão.
+  const totalOutstanding = typedCards.reduce(
+    (total, card) =>
+      total + getOutstandingAmount(statementByCardId.get(card.id)),
+    0,
+  );
 
   const totalAvailable = Math.max(
     totalCreditLimit - totalOutstanding,
@@ -282,11 +304,19 @@ export default async function CardsPage({params}: PageProps) {
 
             <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 backdrop-blur-sm">
               <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                {isEnglish ? "Open statements" : "Faturas em aberto"}
+                {isEnglish
+                  ? "Selected open statements"
+                  : "Faturas atuais em aberto"}
               </p>
 
               <p className="mt-2 text-xl font-semibold tracking-[-0.04em] text-slate-100">
                 {formatCurrency(totalOutstanding, locale)}
+              </p>
+
+              <p className="mt-1 text-[11px] leading-4 text-slate-500">
+                {isEnglish
+                  ? "One outstanding statement per card, ordered by due date."
+                  : "Uma fatura pendente por cartão, por ordem de vencimento."}
               </p>
             </div>
           </div>
@@ -328,13 +358,15 @@ export default async function CardsPage({params}: PageProps) {
       ) : (
         <section className="grid gap-6 md:grid-cols-2 2xl:grid-cols-3">
           {typedCards.map((card) => {
-            const statement = statementByCardId.get(card.id) ?? null;
+            const statement =
+              statementByCardId.get(card.id) ?? null;
 
             const creditLimit = Number(card.credit_limit ?? 0);
-            const totalAmount = Number(statement?.total_amount ?? 0);
-            const paidAmount = Number(statement?.paid_amount ?? 0);
-            const outstanding = Math.max(totalAmount - paidAmount, 0);
-            const available = Math.max(creditLimit - outstanding, 0);
+            const outstanding = getOutstandingAmount(statement);
+            const available = Math.max(
+              creditLimit - outstanding,
+              0,
+            );
 
             const usedPercentage =
               creditLimit > 0
@@ -423,7 +455,9 @@ export default async function CardsPage({params}: PageProps) {
 
                     <div className="flex items-center gap-3">
                       <div
-                        aria-label={isEnglish ? "Card chip" : "Chip do cartão"}
+                        aria-label={
+                          isEnglish ? "Card chip" : "Chip do cartão"
+                        }
                         className="relative h-8 w-11 overflow-hidden rounded-lg border border-black/10 shadow-inner"
                         style={{
                           background:
@@ -529,7 +563,10 @@ export default async function CardsPage({params}: PageProps) {
                         statement?.status ?? null,
                       )}`}
                     >
-                      {getStatusLabel(statement?.status ?? null, isEnglish)}
+                      {getStatusLabel(
+                        statement?.status ?? null,
+                        isEnglish,
+                      )}
                     </span>
                   </div>
 
@@ -541,22 +578,30 @@ export default async function CardsPage({params}: PageProps) {
 
                       <p className="mt-2 text-xs leading-5 text-slate-400">
                         {isEnglish
-                          ? `Closes ${formatDate(statement.closing_date, locale)} · Due ${formatDate(statement.due_date, locale)}`
-                          : `Fecha em ${formatDate(statement.closing_date, locale)} · Vence em ${formatDate(statement.due_date, locale)}`}
+                          ? `Closing date: ${formatDate(statement.closing_date, locale)} · Due: ${formatDate(statement.due_date, locale)}`
+                          : `Fechamento: ${formatDate(statement.closing_date, locale)} · Vencimento: ${formatDate(statement.due_date, locale)}`}
+                      </p>
+
+                      <p className="mt-2 text-[11px] leading-5 text-slate-500">
+                        {isEnglish
+                          ? "Outstanding statement with the earliest due date. After payment, the next existing statement is displayed."
+                          : "Fatura pendente com o vencimento mais próximo. Após o pagamento, a próxima fatura existente será exibida."}
                       </p>
 
                       <Link
                         href={`/${locale}/cards/${card.id}/statements/${statement.id}`}
                         className="mt-4 inline-flex text-xs font-bold text-emerald-300 transition hover:text-emerald-200"
                       >
-                        {isEnglish ? "View statement →" : "Ver fatura →"}
+                        {isEnglish
+                          ? "View statement →"
+                          : "Ver fatura →"}
                       </Link>
                     </>
                   ) : (
                     <p className="mt-3 text-sm leading-6 text-slate-400">
                       {isEnglish
-                        ? "No open statement has been generated yet."
-                        : "Nenhuma fatura aberta foi gerada ainda."}
+                        ? "There are no outstanding statements with a remaining balance."
+                        : "Não há faturas pendentes com valor restante a pagar."}
                     </p>
                   )}
                 </div>

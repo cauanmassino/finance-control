@@ -1,45 +1,50 @@
-"use client"
+"use client";
 
-import { useState } from "react"
-import { createTransaction } from "@/app/[locale]/(app)/transactions/actions"
+import {useState, type ChangeEvent} from "react";
+import {createTransaction} from "@/app/[locale]/(app)/transactions/actions";
 
 type CardOption = {
-  id: string
-  name: string
-  institution: string | null
-  brand: string | null
-  last_four: string | null
-}
+  id: string;
+  name: string;
+  institution: string | null;
+  brand: string | null;
+  last_four: string | null;
+};
 
 type AccountOption = {
-  id: string
-  name: string
-}
+  id: string;
+  name: string;
+};
 
 type CategoryOption = {
-  id: string
-  name: string
-  type: "income" | "expense"
-}
+  id: string;
+  name: string;
+  type: "income" | "expense";
+};
 
 type TransactionFormProps = {
-  locale: string
-  cards: CardOption[]
-  accounts: AccountOption[]
-  categories: CategoryOption[]
-}
+  locale: string;
+  cards: CardOption[];
+  accounts: AccountOption[];
+  categories: CategoryOption[];
+};
 
-type TransactionType = "income" | "expense" | "transfer"
-type PaymentMethod = "account" | "card"
-type PaymentStatus = "paid" | "pending"
+type TransactionType = "income" | "expense" | "transfer";
+type PaymentMethod = "account" | "card";
 
 const selectClassName =
-  "app-input h-11 rounded-xl bg-slate-950 px-3.5 text-sm text-white outline-none focus:border-emerald-400 focus:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-45"
+  "app-input h-11 rounded-xl bg-slate-950 px-3.5 text-sm text-white outline-none focus:border-emerald-400 focus:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-45";
 
-const optionClassName = "bg-slate-950 text-white"
+const optionClassName = "bg-slate-950 text-white";
 
 function getToday() {
-  return new Date().toISOString().slice(0, 10)
+  const date = new Date();
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
 }
 
 function CardIcon() {
@@ -56,38 +61,7 @@ function CardIcon() {
       <path d="M2 10h20" strokeLinecap="round" />
       <path d="M6 15h3" strokeLinecap="round" />
     </svg>
-  )
-}
-
-function ClockIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-4 w-4"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth="2"
-    >
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3 2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
-
-function CheckIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-4 w-4"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth="2.3"
-    >
-      <path d="m5 12 4 4L19 6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
+  );
 }
 
 export function TransactionForm({
@@ -97,77 +71,75 @@ export function TransactionForm({
   categories,
 }: TransactionFormProps) {
   const [transactionType, setTransactionType] =
-    useState<TransactionType>("expense")
+    useState<TransactionType>("expense");
 
   const [paymentMethod, setPaymentMethod] =
-    useState<PaymentMethod>("account")
+    useState<PaymentMethod>("account");
 
-  const [paymentStatus, setPaymentStatus] =
-    useState<PaymentStatus>("paid")
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [isInstallment, setIsInstallment] = useState(false);
 
-  const [isRecurring, setIsRecurring] = useState(false)
-  const [isInstallment, setIsInstallment] = useState(false)
-
-  const isEnglish = locale === "en"
-
-  const availableCategories =
-    transactionType === "transfer"
-      ? []
-      : categories.filter((category) => category.type === transactionType)
-
-  const isTransfer = transactionType === "transfer"
-  const canUseCreditCard = transactionType === "expense"
+  const isEnglish = locale === "en";
+  const isTransfer = transactionType === "transfer";
+  const canUseCreditCard = transactionType === "expense";
 
   const isCreditCardPurchase =
-    transactionType === "expense" && paymentMethod === "card"
+    transactionType === "expense" && paymentMethod === "card";
+
+  const availableCategories = isTransfer
+    ? []
+    : categories.filter(
+        (category) => category.type === transactionType,
+      );
 
   function handleTransactionTypeChange(
-    event: React.ChangeEvent<HTMLSelectElement>,
+    event: ChangeEvent<HTMLSelectElement>,
   ) {
-    const nextType = event.target.value as TransactionType
+    const nextType = event.target.value as TransactionType;
 
-    setTransactionType(nextType)
+    setTransactionType(nextType);
 
     if (nextType !== "expense") {
-      setPaymentMethod("account")
-      setPaymentStatus("paid")
-      setIsInstallment(false)
+      setPaymentMethod("account");
+      setIsInstallment(false);
+    }
+
+    if (nextType === "transfer") {
+      setIsRecurring(false);
     }
   }
 
   function handlePaymentMethodChange(
-    event: React.ChangeEvent<HTMLSelectElement>,
+    event: ChangeEvent<HTMLSelectElement>,
   ) {
-    const nextMethod = event.target.value as PaymentMethod
-
-    setPaymentMethod(nextMethod)
-
-    if (nextMethod === "card") {
-      setPaymentStatus("pending")
-    } else {
-      setPaymentStatus("paid")
-    }
+    setPaymentMethod(event.target.value as PaymentMethod);
   }
 
   function handleRecurringChange(checked: boolean) {
-    setIsRecurring(checked)
+    setIsRecurring(checked);
 
     if (checked) {
-      setIsInstallment(false)
+      setIsInstallment(false);
     }
   }
 
   function handleInstallmentChange(checked: boolean) {
-    setIsInstallment(checked)
+    setIsInstallment(checked);
 
     if (checked) {
-      setIsRecurring(false)
+      setIsRecurring(false);
     }
   }
 
   return (
     <form action={createTransaction} className="space-y-6">
       <input name="locale" type="hidden" value={locale} />
+
+      <input
+        name="payment_status"
+        type="hidden"
+        value={isCreditCardPurchase ? "pending" : "paid"}
+      />
 
       <section className="space-y-4">
         <h2 className="text-lg font-semibold text-white">
@@ -189,9 +161,11 @@ export function TransactionForm({
               <option className={optionClassName} value="expense">
                 {isEnglish ? "Expense" : "Despesa"}
               </option>
+
               <option className={optionClassName} value="income">
                 {isEnglish ? "Income" : "Receita"}
               </option>
+
               <option className={optionClassName} value="transfer">
                 {isEnglish ? "Transfer" : "Transferência"}
               </option>
@@ -240,7 +214,9 @@ export function TransactionForm({
             </span>
 
             <select
+              key={transactionType}
               className={selectClassName}
+              defaultValue=""
               disabled={isTransfer}
               name="category_id"
             >
@@ -288,6 +264,14 @@ export function TransactionForm({
             {isEnglish ? "Payment method" : "Forma de pagamento"}
           </h2>
 
+          {!canUseCreditCard ? (
+            <input
+              name="payment_method"
+              type="hidden"
+              value="account"
+            />
+          ) : null}
+
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-slate-300">
@@ -313,7 +297,7 @@ export function TransactionForm({
               </select>
             </label>
 
-            {paymentMethod === "account" ? (
+            {!isCreditCardPurchase ? (
               <label className="flex flex-col gap-1.5">
                 <span className="text-sm font-medium text-slate-300">
                   {isEnglish ? "Account" : "Conta"}
@@ -321,11 +305,14 @@ export function TransactionForm({
 
                 <select
                   className={selectClassName}
+                  defaultValue=""
                   name="account_id"
                   required
                 >
                   <option className={optionClassName} value="">
-                    {isEnglish ? "Select an account" : "Selecione a conta"}
+                    {isEnglish
+                      ? "Select an account"
+                      : "Selecione a conta"}
                   </option>
 
                   {accounts.map((account) => (
@@ -349,21 +336,26 @@ export function TransactionForm({
 
                 <select
                   className={selectClassName}
+                  defaultValue=""
                   name="credit_card_id"
                   required
                 >
                   <option className={optionClassName} value="">
-                    {isEnglish ? "Select a credit card" : "Selecione o cartão"}
+                    {isEnglish
+                      ? "Select a credit card"
+                      : "Selecione o cartão"}
                   </option>
 
                   {cards.map((card) => {
                     const details = [
                       card.institution,
                       card.brand,
-                      card.last_four ? `•••• ${card.last_four}` : null,
+                      card.last_four
+                        ? `•••• ${card.last_four}`
+                        : null,
                     ]
                       .filter(Boolean)
-                      .join(" · ")
+                      .join(" · ");
 
                     return (
                       <option
@@ -371,9 +363,11 @@ export function TransactionForm({
                         key={card.id}
                         value={card.id}
                       >
-                        {details ? `${card.name} — ${details}` : card.name}
+                        {details
+                          ? `${card.name} — ${details}`
+                          : card.name}
                       </option>
-                    )
+                    );
                   })}
                 </select>
               </label>
@@ -387,106 +381,42 @@ export function TransactionForm({
                   <CardIcon />
                 </span>
 
-                <div>
+                <div className="min-w-0">
                   <p className="text-sm font-semibold text-amber-100">
                     {isEnglish
-                      ? "Credit card purchase"
-                      : "Compra no cartão de crédito"}
+                      ? "This purchase will be added to your statement"
+                      : "Esta compra será incluída na fatura"}
                   </p>
 
                   <p className="mt-1 text-xs leading-5 text-amber-100/70">
+                    {isInstallment
+                      ? isEnglish
+                        ? "Each installment will be added to the corresponding statement of the selected card. Register the statement payment under Cards when you pay it."
+                        : "Cada parcela será incluída na fatura correspondente do cartão selecionado. Registre o pagamento da fatura na página de Cartões quando ela for paga."
+                      : isEnglish
+                        ? "The amount will be added to the statement of the selected card. Register the statement payment under Cards when you pay it."
+                        : "O valor será incluído na fatura do cartão selecionado. Registre o pagamento da fatura na página de Cartões quando ela for paga."}
+                  </p>
+
+                  <p className="mt-2 text-xs leading-5 text-amber-100/70">
                     {isEnglish
-                      ? "This purchase is added to your credit card statement and does not reduce your bank account balance immediately."
-                      : "Esta compra entra na fatura do cartão e não reduz o saldo da sua conta bancária imediatamente."}
+                      ? "Creating this purchase does not withdraw money from a bank account."
+                      : "Cadastrar esta compra não retira dinheiro de uma conta bancária."}
                   </p>
                 </div>
               </div>
-
-              <input
-                name="payment_status"
-                type="hidden"
-                value={paymentStatus}
-              />
-
-              <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                <label
-                  className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition ${
-                    paymentStatus === "pending"
-                      ? "border-amber-300/40 bg-amber-300/[0.1] text-amber-100"
-                      : "border-white/[0.1] bg-white/[0.025] text-slate-400 hover:bg-white/[0.05]"
-                  }`}
-                >
-                  <input
-                    checked={paymentStatus === "pending"}
-                    className="mt-0.5 accent-amber-300"
-                    name="payment_status_option"
-                    onChange={() => setPaymentStatus("pending")}
-                    type="radio"
-                    value="pending"
-                  />
-
-                  <span>
-                    <span className="flex items-center gap-1.5 text-xs font-bold">
-                      <ClockIcon />
-                      {isEnglish ? "Not paid yet" : "Ainda não pago"}
-                    </span>
-
-                    <span className="mt-1 block text-[11px] leading-4 opacity-75">
-                      {isEnglish
-                        ? "Keep this expense in the card statement until payment."
-                        : "Mantém esta despesa na fatura até o pagamento."}
-                    </span>
-                  </span>
-                </label>
-
-                <label
-                  className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition ${
-                    paymentStatus === "paid"
-                      ? "border-emerald-300/40 bg-emerald-300/[0.1] text-emerald-100"
-                      : "border-white/[0.1] bg-white/[0.025] text-slate-400 hover:bg-white/[0.05]"
-                  }`}
-                >
-                  <input
-                    checked={paymentStatus === "paid"}
-                    className="mt-0.5 accent-emerald-300"
-                    name="payment_status_option"
-                    onChange={() => setPaymentStatus("paid")}
-                    type="radio"
-                    value="paid"
-                  />
-
-                  <span>
-                    <span className="flex items-center gap-1.5 text-xs font-bold">
-                      <CheckIcon />
-                      {isEnglish ? "Already paid" : "Já pago"}
-                    </span>
-
-                    <span className="mt-1 block text-[11px] leading-4 opacity-75">
-                      {isEnglish
-                        ? "Use this only when the expense has already been settled."
-                        : "Use somente quando esta despesa já tiver sido quitada."}
-                    </span>
-                  </span>
-                </label>
-              </div>
             </div>
           ) : (
-            <input name="payment_status" type="hidden" value="paid" />
-          )}
-
-          <p className="text-xs leading-5 text-slate-400">
-            {isCreditCardPurchase
-              ? isEnglish
-                ? "The actual bank account withdrawal should be registered when you pay the credit card statement."
-                : "A saída real da conta bancária deve ser registrada quando você pagar a fatura do cartão."
-              : transactionType === "income"
+            <p className="text-xs leading-5 text-slate-400">
+              {transactionType === "income"
                 ? isEnglish
                   ? "The income will be credited directly to the selected account."
                   : "A receita será creditada diretamente na conta selecionada."
                 : isEnglish
                   ? "The expense will be debited directly from the selected account."
                   : "A despesa será debitada diretamente da conta selecionada."}
-          </p>
+            </p>
+          )}
         </section>
       ) : null}
 
@@ -498,8 +428,11 @@ export function TransactionForm({
               : "Transferência entre contas"}
           </h2>
 
-          <input name="payment_method" type="hidden" value="transfer" />
-          <input name="payment_status" type="hidden" value="paid" />
+          <input
+            name="payment_method"
+            type="hidden"
+            value="transfer"
+          />
 
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-1.5">
@@ -509,6 +442,7 @@ export function TransactionForm({
 
               <select
                 className={selectClassName}
+                defaultValue=""
                 name="account_id"
                 required
               >
@@ -532,11 +466,14 @@ export function TransactionForm({
 
             <label className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-slate-300">
-                {isEnglish ? "Destination account" : "Conta de destino"}
+                {isEnglish
+                  ? "Destination account"
+                  : "Conta de destino"}
               </span>
 
               <select
                 className={selectClassName}
+                defaultValue=""
                 name="transfer_to_account_id"
                 required
               >
@@ -606,13 +543,24 @@ export function TransactionForm({
                     name="frequency"
                     required
                   >
-                    <option className={optionClassName} value="weekly">
+                    <option
+                      className={optionClassName}
+                      value="weekly"
+                    >
                       {isEnglish ? "Weekly" : "Semanal"}
                     </option>
-                    <option className={optionClassName} value="monthly">
+
+                    <option
+                      className={optionClassName}
+                      value="monthly"
+                    >
                       {isEnglish ? "Monthly" : "Mensal"}
                     </option>
-                    <option className={optionClassName} value="yearly">
+
+                    <option
+                      className={optionClassName}
+                      value="yearly"
+                    >
                       {isEnglish ? "Yearly" : "Anual"}
                     </option>
                   </select>
@@ -649,7 +597,9 @@ export function TransactionForm({
                   />
 
                   <span className="text-sm font-medium text-slate-200">
-                    {isEnglish ? "Is installment based?" : "É parcelado?"}
+                    {isEnglish
+                      ? "Is installment based?"
+                      : "É parcelado?"}
                   </span>
                 </label>
 
@@ -668,6 +618,7 @@ export function TransactionForm({
                       min={2}
                       name="installments"
                       required
+                      step={1}
                       type="number"
                     />
                   </label>
@@ -678,8 +629,8 @@ export function TransactionForm({
             <p className="text-xs leading-5 text-slate-400">
               {isCreditCardPurchase
                 ? isEnglish
-                  ? "Credit card purchases can be recurring or split into installments. A recurring purchase stays pending until its statement is paid."
-                  : "Compras no cartão podem ser recorrentes ou parceladas. Uma compra recorrente permanece pendente até o pagamento da fatura."
+                  ? "Credit card purchases can be recurring or split into installments, but not both. Each purchase is linked to its corresponding statement."
+                  : "Compras no cartão podem ser recorrentes ou parceladas, mas não as duas coisas ao mesmo tempo. Cada compra é vinculada à sua fatura correspondente."
                 : isEnglish
                   ? "An expense cannot be recurring and installment based at the same time. Installments are created in consecutive months."
                   : "Uma despesa não pode ser recorrente e parcelada ao mesmo tempo. Parcelas serão lançadas em meses consecutivos."}
@@ -721,5 +672,5 @@ export function TransactionForm({
         </button>
       </div>
     </form>
-  )
+  );
 }

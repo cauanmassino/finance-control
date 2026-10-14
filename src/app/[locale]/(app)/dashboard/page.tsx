@@ -321,6 +321,19 @@ export default async function DashboardPage({
     redirect(`/${locale}/auth/login`)
   }
 
+const nameCandidates: unknown[] = [
+  user.user_metadata?.full_name,
+  user.user_metadata?.name,
+  user.user_metadata?.display_name,
+]
+
+const userFullName = nameCandidates.find(
+  (value): value is string =>
+    typeof value === "string" && value.trim().length > 0,
+)
+
+const userFirstName = userFullName?.trim().split(/\s+/)[0] ?? null
+
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("onboarding_completed")
@@ -458,10 +471,14 @@ export default async function DashboardPage({
 
     supabase
       .from("credit_card_statements")
-      .select("id, credit_card_id, closing_date, due_date, total_amount, paid_amount, status")
+      .select(
+        "id, credit_card_id, closing_date, due_date, total_amount, paid_amount, status",
+      )
       .eq("user_id", user.id)
       .in("status", ["open", "closed", "overdue"])
-      .order("closing_date", { ascending: false }),
+      .order("due_date", {ascending: true})
+      .order("closing_date", {ascending: true})
+      .order("id", {ascending: true}),
 
     supabase
       .from("credit_cards")
@@ -549,12 +566,27 @@ export default async function DashboardPage({
     0,
   )
 
-  // Mesma selecao de cards/page.tsx: primeira fatura por cartao,
-  // ordenada por closing_date decrescente, incluindo cartoes pausados.
-  const statementByCardId = new Map<string, CreditCardStatement>()
+  // Mesma seleção de cards/page.tsx: uma fatura com saldo restante por cartão.
+  // Prioriza o vencimento mais próximo e inclui cartões pausados.
+  const statementByCardId = new Map<
+    string,
+    CreditCardStatement
+  >();
+
   for (const statement of typedCreditCardStatements) {
+    const totalAmount = Number(statement.total_amount ?? 0);
+    const paidAmount = Number(statement.paid_amount ?? 0);
+    const outstanding = Math.max(totalAmount - paidAmount, 0);
+
+    if (outstanding <= 0) {
+      continue;
+    }
+
     if (!statementByCardId.has(statement.credit_card_id)) {
-      statementByCardId.set(statement.credit_card_id, statement)
+      statementByCardId.set(
+        statement.credit_card_id,
+        statement,
+      );
     }
   }
   const currentCardStatements = typedCards.map((card) => {
@@ -825,8 +857,8 @@ export default async function DashboardPage({
               ? "Credit card bills are open"
               : "Existem faturas de cartão em aberto",
             description: isEnglish
-              ? `You currently owe ${formatCurrency(totalCreditCardDebt, locale)} on credit cards.`
-              : `Você possui ${formatCurrency(totalCreditCardDebt, locale)} em faturas de cartão pendentes.`,
+              ? `The selected statements have ${formatCurrency(totalCreditCardDebt, locale)} remaining to pay.`
+              : `As faturas selecionadas têm ${formatCurrency(totalCreditCardDebt, locale)} restantes a pagar.`,
             href: `/${locale}/cards`,
             iconName: "wallet",
             color: "#fcd34d",
@@ -866,9 +898,24 @@ export default async function DashboardPage({
 
         <div className="relative flex flex-col gap-7 xl:flex-row xl:items-end xl:justify-between">
           <div className="max-w-2xl">
-            <p className="app-kicker">
-              {isEnglish ? "Financial overview" : "Visão financeira"}
-            </p>
+<p className="app-kicker">
+  {isEnglish ? "Financial overview" : "Visão financeira"}
+</p>
+
+    <p className="mt-4 text-base font-medium text-slate-200 sm:text-lg">
+      {isEnglish ? "Welcome" : "Bem-vindo"}
+
+      {userFirstName ? (
+        <>
+          {", "}
+          <span className="font-semibold text-emerald-300">
+            {userFirstName}
+          </span>
+        </>
+      ) : null}
+
+      {"!"}
+    </p>
 
             <h1 className="mt-3 font-(family-name:--font-display) text-3xl font-semibold tracking-[-0.055em] text-white sm:text-4xl lg:text-5xl">
               {isEnglish ? "Your money, clear." : "Seu dinheiro, claro."}
@@ -1445,8 +1492,8 @@ export default async function DashboardPage({
           </summary>
           <p className="mt-3 text-xs leading-5 text-slate-400">
             {isEnglish
-              ? "Same statements displayed on Cards: one per card, with the latest closing date among open, closed or overdue statements. Includes paused cards. Not filtered by the selected period. Unlinked purchases and other statements are not added."
-              : "Mesmas faturas exibidas em Cartões: uma por cartão, com o fechamento mais recente entre abertas, fechadas ou vencidas. Inclui cartões pausados. Não é filtrado pelo período selecionado. Compras sem fatura e demais faturas não são somadas."}
+              ? "Same statements displayed on Cards: one per card, selecting the earliest due date among open, closed or overdue statements with an outstanding balance. Includes paused cards. Not filtered by the selected period. Unlinked purchases and other statements are not added."
+              : "Mesmas faturas exibidas em Cartões: uma por cartão, selecionando o vencimento mais próximo entre abertas, fechadas ou vencidas com saldo restante. Inclui cartões pausados. Não é filtrado pelo período selecionado. Compras sem fatura e demais faturas não são somadas."}
           </p>
           <div className="mt-4 space-y-3">
             {currentCardStatements.map(({card, statement, total, paid, outstanding}) => (

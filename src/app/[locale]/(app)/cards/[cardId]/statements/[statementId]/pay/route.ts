@@ -4,8 +4,22 @@ import {createClient} from "@/lib/supabase/server";
 
 type Locale = "pt" | "en";
 
-function getLocaleFromPathname(pathname: string): Locale {
-  return pathname.startsWith("/en") ? "en" : "pt";
+type RouteContext = {
+  params: Promise<{
+    locale: string;
+    cardId: string;
+    statementId: string;
+  }>;
+};
+
+type PaymentResult = {
+  status: "paid" | "already_paid";
+  amount: number | string;
+  transaction_id?: string;
+};
+
+function getLocale(value: string): Locale {
+  return value === "en" ? "en" : "pt";
 }
 
 function getText(formData: FormData, field: string) {
@@ -14,58 +28,195 @@ function getText(formData: FormData, field: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function formatCurrency(value: number, locale: Locale) {
-  return new Intl.NumberFormat(locale === "en" ? "en-US" : "pt-BR", {
-    style: "currency",
-    currency: locale === "en" ? "USD" : "BRL",
-    maximumFractionDigits: 2,
-  }).format(value);
-}
-
-function getAccountBalance(
-  initialBalance: number | string | null,
-  transactions: Array<{
-    amount: number | string;
-    type: "income" | "expense" | "transfer";
-    account_id: string | null;
-    transfer_account_id: string | null;
-  }>,
-  accountId: string,
-) {
-  return transactions.reduce(
-    (total, transaction) => {
-      const amount = Number(transaction.amount);
-
-      if (transaction.type === "income") {
-        return transaction.account_id === accountId
-          ? total + amount
-          : total;
-      }
-
-      if (transaction.type === "expense") {
-        return transaction.account_id === accountId
-          ? total - amount
-          : total;
-      }
-
-      if (transaction.type === "transfer") {
-        if (transaction.account_id === accountId) {
-          return total - amount;
-        }
-
-        if (transaction.transfer_account_id === accountId) {
-          return total + amount;
-        }
-      }
-
-      return total;
-    },
-    Number(initialBalance ?? 0),
+function isValidUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    value,
   );
 }
 
-export async function POST(request: NextRequest) {
-  const locale = getLocaleFromPathname(request.nextUrl.pathname);
+function isValidDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] = value.split("-").map(Number);
+
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    year < 1000 ||
+    year > 9999 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1
+  ) {
+    return false;
+  }
+
+  const lastDay = new Date(
+    Date.UTC(year, month, 0),
+  ).getUTCDate();
+
+  return day <= lastDay;
+}
+
+function getTodayInBrazil() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const year = parts.find(
+    (part) => part.type === "year",
+  )?.value;
+
+  const month = parts.find(
+    (part) => part.type === "month",
+  )?.value;
+
+  const day = parts.find(
+    (part) => part.type === "day",
+  )?.value;
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatCurrency(value: number, locale: Locale) {
+  return new Intl.NumberFormat(
+    locale === "en" ? "en-US" : "pt-BR",
+    {
+      style: "currency",
+      currency: locale === "en" ? "USD" : "BRL",
+      maximumFractionDigits: 2,
+    },
+  ).format(value);
+}
+
+function getPaymentErrorMessage(
+  message: string,
+  locale: Locale,
+) {
+  const isEnglish = locale === "en";
+
+  if (message.includes("PAYMENT_UNAUTHORIZED")) {
+    return isEnglish
+      ? "Your session has expired. Sign in again."
+      : "Sua sessão expirou. Entre novamente.";
+  }
+
+  if (message.includes("PAYMENT_INVALID_DATE")) {
+    return isEnglish
+      ? "Enter a valid payment date."
+      : "Informe uma data válida para o pagamento.";
+  }
+
+  if (message.includes("PAYMENT_STATEMENT_NOT_FOUND")) {
+    return isEnglish
+      ? "The statement was not found or does not belong to this card."
+      : "A fatura não foi encontrada ou não pertence a este cartão.";
+  }
+
+  if (message.includes("PAYMENT_ACCOUNT_NOT_FOUND")) {
+    return isEnglish
+      ? "The selected account is invalid."
+      : "A conta selecionada não é válida.";
+  }
+
+  if (
+    message.includes("PAYMENT_INSUFFICIENT_BALANCE")
+  ) {
+    return isEnglish
+      ? "The selected account does not have enough balance to pay the remaining statement amount."
+      : "A conta selecionada não possui saldo suficiente para pagar o valor restante da fatura.";
+  }
+
+  return isEnglish
+    ? "Could not confirm the statement payment. Refresh the statement and check your transactions before trying again."
+    : "Não foi possível confirmar o pagamento da fatura. Atualize a fatura e confira os lançamentos antes de tentar novamente.";
+}
+
+function revalidatePaymentPaths(
+  locale: Locale,
+  cardId: string,
+  statementId: string,
+) {
+  revalidatePath(`/${locale}`);
+  revalidatePath(`/${locale}/dashboard`);
+  revalidatePath(`/${locale}/financial-health`);
+  revalidatePath(`/${locale}/accounts`);
+  revalidatePath(`/${locale}/transactions`);
+  revalidatePath(`/${locale}/reports`);
+  revalidatePath(`/${locale}/cards`);
+  revalidatePath(`/${locale}/cards/${cardId}`);
+
+  revalidatePath(
+    `/${locale}/cards/${cardId}/statements/${statementId}`,
+  );
+}
+
+export async function POST(
+  request: NextRequest,
+  context: RouteContext,
+) {
+  const params = await context.params;
+
+  const locale = getLocale(params.locale);
+  const cardId = params.cardId;
+  const statementId = params.statementId;
+
+  if (
+    !isValidUuid(cardId) ||
+    !isValidUuid(statementId)
+  ) {
+    const url = new URL(
+      `/${locale}/cards`,
+      request.url,
+    );
+
+    url.searchParams.set(
+      "error",
+      locale === "en"
+        ? "Invalid card or statement."
+        : "Cartão ou fatura inválidos.",
+    );
+
+    return NextResponse.redirect(url, 303);
+  }
+
+  const statementBasePath =
+    `/${locale}/cards/${cardId}/statements/${statementId}`;
+
+  const redirectWithMessage = (
+    key: "message" | "error",
+    value: string,
+  ) => {
+    const url = new URL(
+      statementBasePath,
+      request.url,
+    );
+
+    url.searchParams.set(key, value);
+
+    return NextResponse.redirect(url, 303);
+  };
+
+  const origin = request.headers.get("origin");
+
+  if (origin && origin !== request.nextUrl.origin) {
+    return NextResponse.json(
+      {
+        error:
+          locale === "en"
+            ? "Invalid request origin."
+            : "Origem da requisição inválida.",
+      },
+      {status: 403},
+    );
+  }
+
   const supabase = await createClient();
 
   const {
@@ -75,34 +226,31 @@ export async function POST(request: NextRequest) {
 
   if (userError || !user) {
     return NextResponse.redirect(
-      new URL(`/${locale}/auth/login`, request.url),
-      303,
-    );
-  }
-
-  const formData = await request.formData();
-
-  const accountId = getText(formData, "account_id");
-
-  const pathSegments = request.nextUrl.pathname.split("/");
-  const paySegmentIndex = pathSegments.lastIndexOf("pay");
-  const statementId = pathSegments[paySegmentIndex - 1] ?? "";
-  const cardIdFromPath = pathSegments[paySegmentIndex - 3] ?? "";
-
-  const statementBasePath =
-    `/${locale}/cards/${cardIdFromPath}/statements/${statementId}`;
-
-  const redirectWithMessage = (
-    key: "message" | "error",
-    value: string,
-  ) =>
-    NextResponse.redirect(
       new URL(
-        `${statementBasePath}?${key}=${encodeURIComponent(value)}`,
+        `/${locale}/auth/login`,
         request.url,
       ),
       303,
     );
+  }
+
+  let formData: FormData;
+
+  try {
+    formData = await request.formData();
+  } catch {
+    return redirectWithMessage(
+      "error",
+      locale === "en"
+        ? "Invalid payment form."
+        : "Formulário de pagamento inválido.",
+    );
+  }
+
+  const accountId = getText(
+    formData,
+    "account_id",
+  );
 
   if (!accountId) {
     return redirectWithMessage(
@@ -113,58 +261,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const {data: statement, error: statementError} = await supabase
-    .from("credit_card_statements")
-    .select(`
-      id,
-      credit_card_id,
-      total_amount,
-      paid_amount,
-      status
-    `)
-    .eq("id", statementId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (statementError || !statement) {
-    console.error("Erro ao buscar fatura para pagamento:", statementError);
-
-    return redirectWithMessage(
-      "error",
-      locale === "en" ? "Statement not found." : "Fatura não encontrada.",
-    );
-  }
-
-  if (statement.credit_card_id !== cardIdFromPath) {
-    return redirectWithMessage(
-      "error",
-      locale === "en" ? "Invalid statement." : "Fatura inválida.",
-    );
-  }
-
-  const totalAmount = Number(statement.total_amount ?? 0);
-  const paidAmount = Number(statement.paid_amount ?? 0);
-  const outstandingAmount = Math.max(totalAmount - paidAmount, 0);
-
-  if (outstandingAmount <= 0 || statement.status === "paid") {
-    return redirectWithMessage(
-      "error",
-      locale === "en"
-        ? "This statement has already been paid."
-        : "Esta fatura já foi paga.",
-    );
-  }
-
-  const {data: account, error: accountError} = await supabase
-    .from("accounts")
-    .select("id, name, initial_balance")
-    .eq("id", accountId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (accountError || !account) {
-    console.error("Erro ao buscar conta de pagamento:", accountError);
-
+  if (!isValidUuid(accountId)) {
     return redirectWithMessage(
       "error",
       locale === "en"
@@ -173,156 +270,110 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  /*
-   * O pagamento da fatura precisa debitar dinheiro real da conta.
-   * Portanto, respeita a regra de não permitir saldo negativo.
-   */
-  const {data: accountTransactions, error: accountTransactionsError} =
-    await supabase
-      .from("transactions")
-      .select("amount, type, account_id, transfer_account_id")
-      .eq("user_id", user.id)
-      .or(
-        `account_id.eq.${account.id},transfer_account_id.eq.${account.id}`,
-      );
-
-  if (accountTransactionsError) {
-    console.error(
-      "Erro ao calcular saldo da conta de pagamento:",
-      accountTransactionsError,
-    );
-
-    return redirectWithMessage(
-      "error",
-      locale === "en"
-        ? "Could not check the account balance."
-        : "Não foi possível verificar o saldo da conta.",
-    );
-  }
-
-  const currentBalance = getAccountBalance(
-    account.initial_balance,
-    (accountTransactions ?? []) as Array<{
-      amount: number | string;
-      type: "income" | "expense" | "transfer";
-      account_id: string | null;
-      transfer_account_id: string | null;
-    }>,
-    account.id,
+  const enteredPaymentDate = getText(
+    formData,
+    "payment_date",
   );
 
-  const projectedBalance = currentBalance - outstandingAmount;
+  const today = getTodayInBrazil();
 
-  if (projectedBalance < 0) {
+  const paymentDate =
+    enteredPaymentDate || today;
+
+  if (
+    !isValidDate(paymentDate) ||
+    paymentDate > today
+  ) {
     return redirectWithMessage(
       "error",
       locale === "en"
-        ? `The "${account.name}" account does not have enough balance to pay this statement. Current balance: ${formatCurrency(currentBalance, locale)}. Payment amount: ${formatCurrency(outstandingAmount, locale)}.`
-        : `A conta "${account.name}" não possui saldo suficiente para pagar esta fatura. Saldo atual: ${formatCurrency(currentBalance, locale)}. Valor do pagamento: ${formatCurrency(outstandingAmount, locale)}.`,
+        ? "Enter a valid payment date that is not in the future."
+        : "Informe uma data de pagamento válida que não esteja no futuro.",
     );
   }
 
-  const paymentDate = new Date().toISOString().slice(0, 10);
-
-  /*
-   * A compra no cartão já foi registrada como despesa.
-   *
-   * Por isso o pagamento NÃO deve ser uma nova despesa categorizada:
-   * ele apenas registra a saída da conta como transferência técnica
-   * vinculada à fatura, evitando que relatórios dupliquem a despesa.
-   *
-   * transfer_account_id recebe a própria conta para compatibilidade
-   * com o CHECK existente de transferências; o cálculo de saldo abaixo
-   * evita duplicidade porque operações de mesmo ID são tratadas
-   * apenas como saída na conta de origem.
-   */
-  const {error: paymentTransactionError} = await supabase
-    .from("transactions")
-    .insert({
-      user_id: user.id,
-      description:
-        locale === "en"
-          ? "Credit card statement payment"
-          : "Pagamento de fatura do cartão",
-      amount: outstandingAmount,
-      type: "transfer",
-      occurred_on: paymentDate,
-      account_id: account.id,
-      transfer_account_id: account.id,
-      category_id: null,
-      payment_method: "transfer",
-      notes:
-        locale === "en"
-          ? `Payment for statement ${statement.id}`
-          : `Pagamento da fatura ${statement.id}`,
-      credit_card_id: statement.credit_card_id,
-      credit_card_statement_id: statement.id,
-    });
-
-  if (paymentTransactionError) {
-    console.error(
-      "Erro ao criar transação de pagamento da fatura:",
+  const {data, error: paymentError} =
+    await supabase.rpc(
+      "pay_credit_card_statement_v1",
       {
-        code: paymentTransactionError.code,
-        message: paymentTransactionError.message,
-        details: paymentTransactionError.details,
-        hint: paymentTransactionError.hint,
+        p_statement_id: statementId,
+        p_card_id: cardId,
+        p_account_id: accountId,
+        p_payment_date: paymentDate,
+      },
+    );
+
+  if (paymentError) {
+    console.error(
+      "Erro ao registrar pagamento da fatura:",
+      {
+        code: paymentError.code,
+        message: paymentError.message,
+        details: paymentError.details,
+        hint: paymentError.hint,
+        statementId,
+        cardId,
+        accountId,
       },
     );
 
     return redirectWithMessage(
       "error",
-      locale === "en"
-        ? "Could not register the statement payment."
-        : "Não foi possível registrar o pagamento da fatura.",
+      getPaymentErrorMessage(
+        paymentError.message,
+        locale,
+      ),
     );
   }
 
-  const newPaidAmount = paidAmount + outstandingAmount;
+  const result =
+    data as PaymentResult | null;
 
-  const {error: statementUpdateError} = await supabase
-    .from("credit_card_statements")
-    .update({
-      paid_amount: newPaidAmount,
-      status: "paid",
-    })
-    .eq("id", statement.id)
-    .eq("user_id", user.id);
-
-  if (statementUpdateError) {
+  if (
+    !result ||
+    (result.status !== "paid" &&
+      result.status !== "already_paid")
+  ) {
     console.error(
-      "Erro ao atualizar pagamento da fatura:",
-      statementUpdateError,
+      "Resposta inesperada ao pagar fatura:",
+      data,
     );
 
-    /*
-     * A transação já foi inserida. Em produção, o ideal seria uma RPC
-     * transacional no banco. Aqui retornamos um erro explícito para que
-     * você não tente pagar novamente sem checar os lançamentos.
-     */
+    revalidatePaymentPaths(
+      locale,
+      cardId,
+      statementId,
+    );
+
     return redirectWithMessage(
       "error",
       locale === "en"
-        ? "The account payment was registered, but the statement could not be updated. Check your transactions before trying again."
-        : "O pagamento foi registrado na conta, mas a fatura não pôde ser atualizada. Verifique os lançamentos antes de tentar novamente.",
+        ? "Unexpected payment response. Refresh the statement and check your transactions before trying again."
+        : "Resposta inesperada do pagamento. Atualize a fatura e confira os lançamentos antes de tentar novamente.",
     );
   }
 
-  revalidatePath(`/${locale}`);
-  revalidatePath(`/${locale}/dashboard`);
-  revalidatePath(`/${locale}/financial-health`);
-  revalidatePath(`/${locale}/accounts`);
-  revalidatePath(`/${locale}/transactions`);
-  revalidatePath(`/${locale}/cards`);
-  revalidatePath(`/${locale}/cards/${statement.credit_card_id}`);
-  revalidatePath(
-    `/${locale}/cards/${statement.credit_card_id}/statements/${statement.id}`,
+  revalidatePaymentPaths(
+    locale,
+    cardId,
+    statementId,
   );
+
+  if (result.status === "already_paid") {
+    return redirectWithMessage(
+      "message",
+      locale === "en"
+        ? "This statement is already settled. No new account withdrawal was recorded."
+        : "Esta fatura já está quitada. Nenhum novo débito foi registrado na conta.",
+    );
+  }
+
+  const paidValue = Number(result.amount);
 
   return redirectWithMessage(
     "message",
     locale === "en"
-      ? "Statement paid successfully."
-      : "Fatura paga com sucesso.",
+      ? `Statement paid successfully. ${formatCurrency(paidValue, locale)} was debited from the selected account.`
+      : `Fatura paga com sucesso. ${formatCurrency(paidValue, locale)} foram debitados da conta selecionada.`,
   );
 }
