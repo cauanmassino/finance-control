@@ -1,0 +1,46 @@
+/* FINCO refinement: intentionally no palette, background or chart overrides. */
+body.finco-refined {
+ --font-inter:var(--font-finco);
+ --font-display:var(--font-finco);
+ --font-sans:var(--font-finco);
+ font-family:var(--font-finco),-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+ -webkit-font-smoothing:antialiased;
+}
+.finco-refined :is(h1,h2,h3,h4,h5,h6,button,input,select,textarea,[data-slot="card-title"],[data-slot="dialog-title"]) {
+ font-family:var(--font-finco),-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+.finco-refined :is(h1,h2,h3,h4,h5,h6) {text-wrap:balance;}
+.finco-refined h1 {letter-spacing:-.04em;line-height:1.16;}
+.finco-refined h2 {letter-spacing:-.025em;line-height:1.25;}
+.finco-refined :is(h3,h4,[data-slot="card-title"],[data-slot="dialog-title"]) {letter-spacing:-.018em;}
+.finco-refined :is(.tabular-nums,.amount-positive,.amount-negative,.amount-transfer) {font-variant-numeric:tabular-nums lining-nums;}
+/* Keep monospace for code, even if the application font changes. */
+.finco-refined :is(code,pre,kbd,samp) {font-family:var(--font-geist-mono,ui-monospace),monospace;}
+.finco-refined [data-slot="card"] {border-radius:24px;}
+.finco-refined [data-slot="card-header"] {row-gap:6px;}
+.finco-refined [data-slot="card-title"] {font-weight:600;line-height:1.4;}
+.finco-refined [data-slot="card-description"] {line-height:1.65;}
+.finco-refined [data-slot="card-footer"] {border-bottom-left-radius:24px;border-bottom-right-radius:24px;}
+.finco-refined :is([data-slot="dialog-content"],[data-slot="alert-dialog-content"]) {border-radius:26px;}
+.finco-refined :is([data-slot="dialog-title"],[data-slot="alert-dialog-title"]) {font-weight:600;line-height:1.4;}
+.finco-refined :is([data-slot="dialog-description"],[data-slot="alert-dialog-description"]) {line-height:1.7;}
+.finco-refined [data-slot="dialog-footer"] {border-bottom-left-radius:26px;border-bottom-right-radius:26px;}
+.finco-refined :is([data-slot="dropdown-menu-content"],[data-slot="select-content"],[data-slot="popover-content"]) {border-radius:16px;}
+.finco-refined [data-slot="select-trigger"] {border-radius:12px;min-height:40px;}
+.finco-refined [data-slot="table-head"] {font-weight:500;letter-spacing:.005em;}
+.finco-refined [data-slot="table-cell"] {line-height:1.55;}
+.finco-refined .app-kicker {font-weight:500;letter-spacing:.075em;}
+/* No transform on cards: calmer hover, without changing their existing colors. */
+.finco-refined .app-surface-hover {transition:box-shadow 180ms ease,border-color 180ms ease,background-color 180ms ease;}
+.finco-refined .app-surface-hover:hover {transform:none;}
+@media(pointer:coarse) {
+ .finco-refined [data-slot="button"],.finco-refined [data-slot="input"],.finco-refined [data-slot="select-trigger"] {min-height:44px;}
+ .finco-refined [data-slot="button"][data-size^="icon"] {min-width:44px;}
+ .finco-refined [data-slot="input"],.finco-refined [data-slot="select-trigger"] {font-size:16px;}
+}
+@media(prefers-reduced-motion:reduce) {
+ .finco-refined *,.finco-refined *::before,.finco-refined *::after {
+  animation-duration:.01ms!important;animation-iteration-count:1!important;
+  transition-duration:.01ms!important;scroll-behavior:auto!important;
+ }
+}
