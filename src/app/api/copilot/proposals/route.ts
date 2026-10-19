@@ -3,6 +3,7 @@ import {revalidatePath} from "next/cache";
 import {z} from "zod";
 
 import {createClient} from "@/lib/supabase/server";
+
 import {
   friendlyProposalError,
   proposalFields,
@@ -36,87 +37,57 @@ export async function GET() {
 
     if (authError || !user) {
       return Response.json(
-        {
-          error: "Entre novamente na sua conta.",
-        },
-        {
-          status: 401,
-          headers: noStoreHeaders,
-        },
+        {error: "Entre novamente na sua conta."},
+        {status: 401, headers: noStoreHeaders},
       );
     }
 
-    const {
-      data,
-      count,
-      error,
-    } = await supabase
+    const {data, count, error} = await supabase
       .from("copilot_transaction_proposals")
-      .select(proposalFields, {
-        count: "exact",
-      })
+      .select(proposalFields, {count: "exact"})
       .eq("user_id", user.id)
       .eq("status", "pending")
       .gt("expires_at", new Date().toISOString())
-      .order("created_at", {
-        ascending: false,
-      })
-      .order("id", {
-        ascending: true,
-      })
+      .order("created_at", {ascending: false})
+      .order("id", {ascending: true})
       .limit(20);
 
     if (error || count === null) {
       console.error(
-        "[FINCO Copiloto] Falha ao consultar propostas.",
+        "[FINCO] Falha ao consultar propostas.",
       );
 
       return Response.json(
         {
           error:
-            "Não foi possível consultar as propostas. Confira a estrutura de propostas no Supabase.",
+            "Não foi possível consultar as propostas. Confira a instalação da migração e dos arquivos.",
         },
-        {
-          status: 503,
-          headers: noStoreHeaders,
-        },
+        {status: 503, headers: noStoreHeaders},
       );
     }
 
-    const proposals = (data ?? []).map((item) =>
-      toReviewable(item),
-    );
-
     return Response.json(
       {
-        proposals,
+        proposals: (data ?? []).map((item) =>
+          toReviewable(item),
+        ),
         totalPending: count,
       },
-      {
-        headers: noStoreHeaders,
-      },
+      {headers: noStoreHeaders},
     );
   } catch {
-    console.error(
-      "[FINCO Copiloto] Falha ao carregar propostas.",
-    );
-
     return Response.json(
       {
         error:
-          "Não foi possível carregar a lista de propostas.",
+          "Não foi possível carregar ou validar a lista de propostas.",
       },
-      {
-        status: 500,
-        headers: noStoreHeaders,
-      },
+      {status: 500, headers: noStoreHeaders},
     );
   }
 }
 
 export async function POST(request: NextRequest) {
-  const receivedOrigin =
-    request.headers.get("origin");
+  const receivedOrigin = request.headers.get("origin");
 
   const configuredOrigin =
     process.env.FINCO_APP_ORIGIN?.trim();
@@ -125,12 +96,9 @@ export async function POST(request: NextRequest) {
     return Response.json(
       {
         error:
-          "Configure FINCO_APP_ORIGIN no .env.local com o endereço usado para abrir o aplicativo.",
+          "Configure FINCO_APP_ORIGIN no .env.local.",
       },
-      {
-        status: 503,
-        headers: noStoreHeaders,
-      },
+      {status: 503, headers: noStoreHeaders},
     );
   }
 
@@ -149,57 +117,33 @@ export async function POST(request: NextRequest) {
     expectedOrigin = configuredUrl.origin;
   } catch {
     return Response.json(
-      {
-        error:
-          "FINCO_APP_ORIGIN está inválido. Confira o endereço configurado no servidor.",
-      },
-      {
-        status: 500,
-        headers: noStoreHeaders,
-      },
+      {error: "FINCO_APP_ORIGIN está inválido."},
+      {status: 500, headers: noStoreHeaders},
     );
   }
 
-  if (
-    !receivedOrigin ||
-    receivedOrigin !== expectedOrigin
-  ) {
-    console.warn(
-      "[FINCO] Origem das propostas recusada:",
-      {
-        receivedOrigin,
-        expectedOrigin,
-      },
-    );
+  if (!receivedOrigin || receivedOrigin !== expectedOrigin) {
+    console.warn("[FINCO] Origem das propostas recusada:", {
+      receivedOrigin,
+      expectedOrigin,
+    });
 
     return Response.json(
       {
         error:
           "Origem das propostas recusada. Confira FINCO_APP_ORIGIN e reinicie o servidor.",
       },
-      {
-        status: 403,
-        headers: noStoreHeaders,
-      },
+      {status: 403, headers: noStoreHeaders},
     );
   }
 
   try {
     const rawBody = await request.text();
 
-    if (
-      new TextEncoder().encode(rawBody).length >
-      4096
-    ) {
+    if (new TextEncoder().encode(rawBody).length > 4096) {
       return Response.json(
-        {
-          error:
-            "A requisição excedeu o tamanho permitido.",
-        },
-        {
-          status: 413,
-          headers: noStoreHeaders,
-        },
+        {error: "A requisição excedeu o tamanho permitido."},
+        {status: 413, headers: noStoreHeaders},
       );
     }
 
@@ -209,35 +153,21 @@ export async function POST(request: NextRequest) {
       decodedBody = JSON.parse(rawBody);
     } catch {
       return Response.json(
-        {
-          error:
-            "O conteúdo enviado não é um JSON válido.",
-        },
-        {
-          status: 400,
-          headers: noStoreHeaders,
-        },
+        {error: "O conteúdo enviado não é JSON válido."},
+        {status: 400, headers: noStoreHeaders},
       );
     }
 
-    const parsed =
-      resolveInputSchema.safeParse(decodedBody);
+    const parsed = resolveInputSchema.safeParse(decodedBody);
 
     if (!parsed.success) {
       return Response.json(
-        {
-          error:
-            "Confira os dados da confirmação.",
-        },
-        {
-          status: 400,
-          headers: noStoreHeaders,
-        },
+        {error: "Confira os dados da confirmação."},
+        {status: 400, headers: noStoreHeaders},
       );
     }
 
     const input = parsed.data;
-
     const supabase = await createClient();
 
     const {
@@ -247,21 +177,12 @@ export async function POST(request: NextRequest) {
 
     if (authError || !user) {
       return Response.json(
-        {
-          error:
-            "Entre novamente na sua conta.",
-        },
-        {
-          status: 401,
-          headers: noStoreHeaders,
-        },
+        {error: "Entre novamente na sua conta."},
+        {status: 401, headers: noStoreHeaders},
       );
     }
 
-    const {
-      data: currentProposal,
-      error: lookupError,
-    } = await supabase
+    const {data: current, error: lookupError} = await supabase
       .from("copilot_transaction_proposals")
       .select(proposalFields)
       .eq("id", input.proposalId)
@@ -269,80 +190,76 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (lookupError) {
-      console.error(
-        "[FINCO Copiloto] Falha ao conferir proposta.",
-      );
-
       return Response.json(
-        {
-          error:
-            "Não foi possível conferir a proposta. Atualize a lista e tente novamente.",
-        },
-        {
-          status: 503,
-          headers: noStoreHeaders,
-        },
+        {error: "Não foi possível conferir a proposta."},
+        {status: 503, headers: noStoreHeaders},
       );
     }
 
-    if (!currentProposal) {
+    if (!current) {
       return Response.json(
         {
           error:
-            "Proposta não encontrada ou sem permissão de acesso.",
+            "Proposta não encontrada ou sem permissão.",
         },
-        {
-          status: 404,
-          headers: noStoreHeaders,
-        },
+        {status: 404, headers: noStoreHeaders},
       );
     }
 
-    const proposal =
-      toReviewable(currentProposal);
+    const proposal = toReviewable(current);
 
-    if (
-      proposal.reviewHash !== input.reviewHash
-    ) {
+    if (proposal.reviewHash !== input.reviewHash) {
       return Response.json(
         {
           error:
-            "A proposta não corresponde aos dados revisados. Atualize a lista antes de continuar.",
+            "Os dados revisados não correspondem à proposta atual. Atualize a lista antes de continuar.",
         },
-        {
-          status: 409,
-          headers: noStoreHeaders,
-        },
+        {status: 409, headers: noStoreHeaders},
       );
     }
 
-    const {
-      data: resolvedData,
-      error: resolveError,
-    } = await supabase.rpc(
-      "resolve_copilot_transaction_v1",
-      {
+    const rpcName =
+      proposal.payment_method === "credit_card"
+        ? "resolve_copilot_card_purchase_v1"
+        : "resolve_copilot_transaction_v1";
+
+    const {data: resolvedData, error: resolveError} =
+      await supabase.rpc(rpcName, {
         p_proposal_id: proposal.id,
         p_action: input.action,
-      },
-    );
+      });
 
     if (resolveError) {
       return Response.json(
         {
-          error: friendlyProposalError(
-            resolveError.message,
-          ),
+          error: friendlyProposalError(resolveError.message),
         },
-        {
-          status: 409,
-          headers: noStoreHeaders,
-        },
+        {status: 409, headers: noStoreHeaders},
       );
     }
 
-    const resolved =
-      toReviewable(resolvedData);
+    const resolved = toReviewable(resolvedData);
+
+    if (resolved.id !== proposal.id) {
+      throw new Error("Unexpected proposal result.");
+    }
+
+    if (
+      input.action === "confirm" &&
+      (
+        resolved.status !== "confirmed" ||
+        !resolved.transaction_id
+      )
+    ) {
+      throw new Error("Confirmation was not verified.");
+    }
+
+    if (
+      input.action === "cancel" &&
+      resolved.status !== "cancelled"
+    ) {
+      throw new Error("Cancellation was not verified.");
+    }
 
     let refreshWarning = false;
 
@@ -355,18 +272,26 @@ export async function POST(request: NextRequest) {
           "reports",
           "budgets",
           "financial-health",
+          "cards",
         ];
 
         for (const path of paths) {
+          revalidatePath(`/${input.locale}/${path}`);
+        }
+
+        if (
+          resolved.credit_card_id &&
+          resolved.credit_card_statement_id
+        ) {
           revalidatePath(
-            `/${input.locale}/${path}`,
+            `/${input.locale}/cards/${resolved.credit_card_id}/statements/${resolved.credit_card_statement_id}`,
           );
         }
       } catch {
         refreshWarning = true;
 
         console.error(
-          "[FINCO Copiloto] Operação confirmada, mas a atualização das páginas falhou.",
+          "[FINCO] Operação confirmada, mas a revalidação falhou.",
         );
       }
     }
@@ -376,24 +301,19 @@ export async function POST(request: NextRequest) {
         proposal: resolved,
         refreshWarning,
       },
-      {
-        headers: noStoreHeaders,
-      },
+      {headers: noStoreHeaders},
     );
   } catch {
     console.error(
-      "[FINCO Copiloto] Não foi possível validar o resultado da operação.",
+      "[FINCO] Não foi possível validar o resultado da operação.",
     );
 
     return Response.json(
       {
         error:
-          "Não foi possível confirmar o resultado. Atualize as propostas e confira os lançamentos antes de preparar outro.",
+          "Não foi possível confirmar o resultado. Confira os lançamentos e atualize as propostas antes de preparar outra.",
       },
-      {
-        status: 500,
-        headers: noStoreHeaders,
-      },
+      {status: 500, headers: noStoreHeaders},
     );
   }
 }

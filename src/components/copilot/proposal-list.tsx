@@ -24,7 +24,7 @@ const reviewableProposalSchema = proposalSchema.extend({
   reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
 });
 
-const proposalListResponseSchema = z.object({
+const listResponseSchema = z.object({
   proposals: z.array(reviewableProposalSchema),
   totalPending: z.number().int().nonnegative(),
 });
@@ -52,9 +52,19 @@ function dateLabel(value: string) {
 function responseError(value: unknown, fallback: string) {
   const parsed = errorResponseSchema.safeParse(value);
 
-  return parsed.success
-    ? parsed.data.error
-    : fallback;
+  return parsed.success ? parsed.data.error : fallback;
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  const contentType = response.headers.get("content-type");
+
+  if (!contentType?.includes("application/json")) {
+    throw new Error(
+      "O servidor retornou uma página em vez de JSON. Confira a rota de propostas e sua sessão.",
+    );
+  }
+
+  return response.json();
 }
 
 export function ProposalList({
@@ -64,17 +74,23 @@ export function ProposalList({
 }: ProposalListProps) {
   const router = useRouter();
 
-  const [proposals, setProposals] = useState<ReviewableProposal[]>([]);
+  const [proposals, setProposals] =
+    useState<ReviewableProposal[]>([]);
+
   const [totalPending, setTotalPending] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [workingId, setWorkingId] = useState<string | null>(null);
+  const [workingId, setWorkingId] =
+    useState<string | null>(null);
+
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [clock, setClock] = useState(() => Date.now());
 
   const requestNumber = useRef(0);
   const workingRef = useRef(false);
-  const refreshController = useRef<AbortController | null>(null);
+
+  const refreshController =
+    useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
     if (workingRef.current) return;
@@ -94,7 +110,7 @@ export function ProposalList({
         signal: controller.signal,
       });
 
-      const result: unknown = await response.json();
+      const result = await readJson(response);
 
       if (!response.ok) {
         throw new Error(
@@ -105,11 +121,11 @@ export function ProposalList({
         );
       }
 
-      const parsed = proposalListResponseSchema.safeParse(result);
+      const parsed = listResponseSchema.safeParse(result);
 
       if (!parsed.success) {
         throw new Error(
-          "O servidor retornou uma lista de propostas inválida.",
+          "A lista de propostas está incompatível. Confira se todos os arquivos foram atualizados.",
         );
       }
 
@@ -176,7 +192,6 @@ export function ProposalList({
 
     workingRef.current = true;
     requestNumber.current += 1;
-
     refreshController.current?.abort();
 
     setWorkingId(proposal.id);
@@ -197,7 +212,7 @@ export function ProposalList({
         }),
       });
 
-      const result: unknown = await response.json();
+      const result = await readJson(response);
 
       if (!response.ok) {
         throw new Error(
@@ -212,11 +227,17 @@ export function ProposalList({
 
       if (!parsed.success) {
         throw new Error(
-          "Não foi possível validar o resultado. Confira os lançamentos antes de repetir a operação.",
+          "Não foi possível validar o resultado. Confira os lançamentos antes de repetir.",
         );
       }
 
       const resolved = parsed.data.proposal;
+
+      if (resolved.id !== proposal.id) {
+        throw new Error(
+          "A resposta não corresponde à proposta revisada. Confira os lançamentos antes de repetir.",
+        );
+      }
 
       if (
         action === "confirm" &&
@@ -231,6 +252,16 @@ export function ProposalList({
       }
 
       if (
+        action === "confirm" &&
+        resolved.payment_method === "credit_card" &&
+        !resolved.credit_card_statement_id
+      ) {
+        throw new Error(
+          "A resposta não informou a fatura. Confira os lançamentos e o cartão antes de repetir.",
+        );
+      }
+
+      if (
         action === "cancel" &&
         resolved.status !== "cancelled"
       ) {
@@ -241,9 +272,7 @@ export function ProposalList({
 
       setProposals((current) =>
         current.map((item) =>
-          item.id === resolved.id
-            ? resolved
-            : item,
+          item.id === resolved.id ? resolved : item,
         ),
       );
 
@@ -252,12 +281,17 @@ export function ProposalList({
       );
 
       if (resolved.status === "confirmed") {
+        const operation =
+          resolved.payment_method === "credit_card"
+            ? "Compra confirmada na fatura, sem débito na conta."
+            : "Lançamento confirmado.";
+
         const warning = parsed.data.refreshWarning
           ? " Atualize a página para conferir os totais."
           : "";
 
         setNotice(
-          `Lançamento confirmado. ID: ${resolved.transaction_id}.${warning}`,
+          `${operation} ID: ${resolved.transaction_id}.${warning}`,
         );
 
         router.refresh();
@@ -290,11 +324,7 @@ export function ProposalList({
 
         <button
           className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={
-            isBusy ||
-            loading ||
-            workingId !== null
-          }
+          disabled={isBusy || loading || workingId !== null}
           onClick={() => {
             void refresh();
           }}
@@ -344,30 +374,41 @@ export function ProposalList({
         const expired =
           Date.parse(proposal.expires_at) <= clock;
 
-        const pending =
-          proposal.status === "pending";
+        const pending = proposal.status === "pending";
+
+        const isCredit =
+          proposal.payment_method === "credit_card";
 
         const disabled =
-          isBusy ||
-          loading ||
-          workingId !== null;
+          isBusy || loading || workingId !== null;
 
-        const isProcessing =
-          workingId === proposal.id;
+        const isProcessing = workingId === proposal.id;
 
         return (
           <article
-            className="min-w-0 rounded-2xl border border-emerald-300/20 bg-emerald-300/5 p-4"
+            className={`min-w-0 rounded-2xl border p-4 ${
+              isCredit
+                ? "border-violet-300/20 bg-violet-300/5"
+                : "border-emerald-300/20 bg-emerald-300/5"
+            }`}
             key={proposal.id}
           >
             <div className="flex items-start justify-between gap-2">
               <h4 className="text-sm font-semibold text-white">
-                {proposal.type === "income"
-                  ? "Receita"
-                  : "Despesa"}
+                {isCredit
+                  ? "Compra no crédito"
+                  : proposal.type === "income"
+                    ? "Receita"
+                    : "Despesa em conta"}
               </h4>
 
-              <span className="text-sm font-semibold tabular-nums text-emerald-200">
+              <span
+                className={`text-sm font-semibold tabular-nums ${
+                  isCredit
+                    ? "text-violet-200"
+                    : "text-emerald-200"
+                }`}
+              >
                 {currency.format(proposal.amount)}
               </span>
             </div>
@@ -384,10 +425,12 @@ export function ProposalList({
 
               <div>
                 <dt className="inline text-slate-500">
-                  Conta:{" "}
+                  {isCredit ? "Cartão: " : "Conta: "}
                 </dt>
                 <dd className="inline">
-                  {proposal.account_name}
+                  {isCredit
+                    ? proposal.credit_card_name
+                    : proposal.account_name}
                 </dd>
               </div>
 
@@ -402,21 +445,59 @@ export function ProposalList({
 
               <div>
                 <dt className="inline text-slate-500">
-                  Data:{" "}
+                  {isCredit ? "Data da compra: " : "Data: "}
                 </dt>
                 <dd className="inline">
                   {dateLabel(proposal.occurred_on)}
                 </dd>
               </div>
 
-              <div>
-                <dt className="inline text-slate-500">
-                  Pagamento:{" "}
-                </dt>
-                <dd className="inline">
-                  Movimentação em conta, marcada como paga
-                </dd>
-              </div>
+              {isCredit ? (
+                <>
+                  <div>
+                    <dt className="inline text-slate-500">
+                      Fechamento da fatura:{" "}
+                    </dt>
+                    <dd className="inline">
+                      {proposal.expected_closing_date
+                        ? dateLabel(
+                            proposal.expected_closing_date,
+                          )
+                        : "Indisponível"}
+                    </dd>
+                  </div>
+
+                  <div>
+                    <dt className="inline text-slate-500">
+                      Vencimento da fatura:{" "}
+                    </dt>
+                    <dd className="inline">
+                      {proposal.expected_due_date
+                        ? dateLabel(proposal.expected_due_date)
+                        : "Indisponível"}
+                    </dd>
+                  </div>
+
+                  <div>
+                    <dt className="inline text-slate-500">
+                      Registro:{" "}
+                    </dt>
+                    <dd className="inline">
+                      Despesa pendente na fatura, sem débito
+                      na conta bancária
+                    </dd>
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <dt className="inline text-slate-500">
+                    Registro:{" "}
+                  </dt>
+                  <dd className="inline">
+                    Movimentação em conta, marcada como paga
+                  </dd>
+                </div>
+              )}
 
               {proposal.notes ? (
                 <div>
@@ -435,7 +516,9 @@ export function ProposalList({
                 <p className="mt-3 text-xs leading-5 text-amber-200">
                   {expired
                     ? "Proposta expirada. Cancele e prepare uma nova."
-                    : "Revise todos os dados. Confirmar cria um lançamento real no FINCO, mas não movimenta dinheiro no banco."}
+                    : isCredit
+                      ? "Confirmar registra uma compra real no FINCO e aumenta a fatura correspondente. A conta bancária não será debitada agora."
+                      : "Confirmar cria um lançamento real no FINCO. Isso não movimenta dinheiro no banco."}
                 </p>
 
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -449,7 +532,9 @@ export function ProposalList({
                   >
                     {isProcessing
                       ? "Processando..."
-                      : "Confirmar lançamento"}
+                      : isCredit
+                        ? "Confirmar compra"
+                        : "Confirmar lançamento"}
                   </button>
 
                   <button
@@ -465,11 +550,26 @@ export function ProposalList({
                 </div>
               </>
             ) : (
-              <p className="mt-3 text-xs text-emerald-200">
-                {proposal.status === "confirmed"
-                  ? "Lançamento confirmado."
-                  : "Proposta cancelada."}
-              </p>
+              <div className="mt-3 space-y-2">
+                <p className="text-xs text-emerald-200">
+                  {proposal.status === "confirmed"
+                    ? isCredit
+                      ? "Compra confirmada na fatura."
+                      : "Lançamento confirmado."
+                    : "Proposta cancelada."}
+                </p>
+
+                {proposal.status === "confirmed" &&
+                proposal.credit_card_id &&
+                proposal.credit_card_statement_id ? (
+                  <a
+                    className="inline-flex text-xs font-semibold text-violet-200 underline underline-offset-4"
+                    href={`/${locale === "en" ? "en" : "pt"}/cards/${proposal.credit_card_id}/statements/${proposal.credit_card_statement_id}`}
+                  >
+                    Ver fatura
+                  </a>
+                ) : null}
+              </div>
             )}
           </article>
         );
