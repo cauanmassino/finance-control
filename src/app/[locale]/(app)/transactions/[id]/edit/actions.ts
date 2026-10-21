@@ -4,395 +4,79 @@ import {revalidatePath} from "next/cache";
 import {redirect} from "next/navigation";
 import {createClient} from "@/lib/supabase/server";
 
-type TransactionType = "income" | "expense";
-
 export type EditTransactionState = {
-  error?: string;
-  warning?: string;
-  requiresNegativeBalanceConfirmation?: boolean;
+  error?: string; warning?: string; requiresNegativeBalanceConfirmation?: boolean;
 };
-
-function getText(formData: FormData, field: string) {
-  const value = formData.get(field);
-
-  return typeof value === "string" ? value.trim() : "";
+const text = (form: FormData, key: string) => {
+  const value = form.get(key); return typeof value === "string" ? value.trim() : "";
+};
+function amountValue(value: string) {
+  let valueToParse = value.replace(/\s/g, "");
+  if (valueToParse.includes(",") && valueToParse.includes(".")) {
+    valueToParse = valueToParse.lastIndexOf(",") > valueToParse.lastIndexOf(".")
+      ? valueToParse.replace(/\./g, "").replace(",", ".") : valueToParse.replace(/,/g, "");
+  } else valueToParse = valueToParse.replace(",", ".");
+  const parsed = Number(valueToParse);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 100) / 100 : null;
 }
-
-function getLocale(value: string) {
-  return value === "en" ? "en" : "pt";
-}
-
-function getValidAmount(value: string) {
-  const rawValue = value.trim();
-
-  if (!rawValue) {
-    return null;
+export async function updateTransaction(_previous: EditTransactionState, form: FormData): Promise<EditTransactionState> {
+  const locale = text(form,"locale") === "en" ? "en" : "pt";
+  const en = locale === "en";
+  const id = text(form,"transaction_id");
+  const method = text(form,"payment_method");
+  const amount = amountValue(text(form,"amount"));
+  const description = text(form,"description");
+  const type = text(form,"type");
+  const date = text(form,"occurred_on");
+  const notes = text(form,"notes");
+  if (!id || !amount || !description || description.length>120 || notes.length>500 || !["expense","income"].includes(type) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return {error: en ? "Check the description, amount, date and transaction details." : "Confira descrição, valor, data e os dados do lançamento."};
   }
-
-  let normalizedValue = rawValue.replace(/\s/g, "");
-
-  const hasComma = normalizedValue.includes(",");
-  const hasDot = normalizedValue.includes(".");
-
-  if (hasComma && hasDot) {
-    const lastComma = normalizedValue.lastIndexOf(",");
-    const lastDot = normalizedValue.lastIndexOf(".");
-
-    if (lastComma > lastDot) {
-      // Formato brasileiro: 1.234,56
-      normalizedValue = normalizedValue
-        .replace(/\./g, "")
-        .replace(",", ".");
-    } else {
-      // Formato americano: 1,234.56
-      normalizedValue = normalizedValue.replace(/,/g, "");
-    }
-  } else if (hasComma) {
-    // Formato brasileiro simples: 5,60
-    normalizedValue = normalizedValue.replace(",", ".");
-  }
-
-  const amount = Number(normalizedValue);
-
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return null;
-  }
-
-  return Math.round(amount * 100) / 100;
-}
-
-function isValidType(value: string): value is TransactionType {
-  return value === "income" || value === "expense";
-}
-
-function isValidDate(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return false;
-  }
-
-  const parsedDate = new Date(`${value}T12:00:00`);
-
-  return !Number.isNaN(parsedDate.getTime());
-}
-
-function formatCurrency(value: number, locale: string) {
-  return new Intl.NumberFormat(locale === "en" ? "en-US" : "pt-BR", {
-    style: "currency",
-    currency: locale === "en" ? "USD" : "BRL",
-    maximumFractionDigits: 2,
-  }).format(value);
-}
-
-function revalidateTransactionPaths(locale: string, transactionId: string) {
-  revalidatePath(`/${locale}`);
-  revalidatePath(`/${locale}/dashboard`);
-  revalidatePath(`/${locale}/transactions`);
-  revalidatePath(`/${locale}/transactions/${transactionId}/edit`);
-  revalidatePath(`/${locale}/reports`);
-  revalidatePath(`/${locale}/accounts`);
-  revalidatePath(`/${locale}/budgets`);
-  revalidatePath(`/${locale}/recurring`);
-}
-
-async function getAccountBalanceWithoutTransaction({
-  supabase,
-  userId,
-  accountId,
-  initialBalance,
-  transactionId,
-}: {
-  supabase: Awaited<ReturnType<typeof createClient>>;
-  userId: string;
-  accountId: string;
-  initialBalance: number | string | null;
-  transactionId: string;
-}) {
-  const {data: transactions, error} = await supabase
-    .from("transactions")
-    .select("id, amount, type, account_id, transfer_account_id")
-    .eq("user_id", userId)
-    .neq("id", transactionId)
-    .or(
-      `account_id.eq.${accountId},transfer_account_id.eq.${accountId}`,
-    );
-
-  if (error) {
-    throw error;
-  }
-
-  return (transactions ?? []).reduce(
-    (total, transaction) => {
-      const transactionAmount = Number(transaction.amount);
-
-      if (transaction.type === "income") {
-        return transaction.account_id === accountId
-          ? total + transactionAmount
-          : total;
-      }
-
-      if (transaction.type === "expense") {
-        return transaction.account_id === accountId
-          ? total - transactionAmount
-          : total;
-      }
-
-      if (transaction.type === "transfer") {
-        if (transaction.account_id === accountId) {
-          return total - transactionAmount;
-        }
-
-        if (transaction.transfer_account_id === accountId) {
-          return total + transactionAmount;
-        }
-      }
-
-      return total;
-    },
-    Number(initialBalance ?? 0),
-  );
-}
-
-export async function updateTransaction(
-  _previousState: EditTransactionState,
-  formData: FormData,
-): Promise<EditTransactionState> {
-  const receivedLocale = getText(formData, "locale");
-  const locale = getLocale(receivedLocale);
-
-  const transactionId = getText(formData, "transaction_id");
-  const description = getText(formData, "description");
-  const amount = getValidAmount(getText(formData, "amount"));
-  const type = getText(formData, "type");
-  const occurredOn = getText(formData, "occurred_on");
-  const accountId = getText(formData, "account_id") || null;
-  const categoryId = getText(formData, "category_id") || null;
-  const paymentMethod = getText(formData, "payment_method") || null;
-  const notes = getText(formData, "notes") || null;
-
-  const confirmedNegativeBalance =
-    formData.get("confirm_negative_balance") === "true";
-
-  if (!transactionId) {
-    return {
-      error:
-        locale === "en"
-          ? "Invalid transaction data."
-          : "Dados do lançamento inválidos.",
-    };
-  }
-
-  if (!description) {
-    return {
-      error:
-        locale === "en"
-          ? "Enter a description."
-          : "Informe uma descrição.",
-    };
-  }
-
-  if (description.length > 120) {
-    return {
-      error:
-        locale === "en"
-          ? "The description can have up to 120 characters."
-          : "A descrição deve ter no máximo 120 caracteres.",
-    };
-  }
-
-  if (!amount) {
-    return {
-      error:
-        locale === "en"
-          ? "Enter an amount greater than zero."
-          : "Informe um valor maior que zero.",
-    };
-  }
-
-  if (!isValidType(type)) {
-    return {
-      error:
-        locale === "en"
-          ? "Invalid transaction type."
-          : "Tipo de lançamento inválido.",
-    };
-  }
-
-  if (!isValidDate(occurredOn)) {
-    return {
-      error:
-        locale === "en"
-          ? "Enter a valid date."
-          : "Informe uma data válida.",
-    };
-  }
-
-  if (notes && notes.length > 500) {
-    return {
-      error:
-        locale === "en"
-          ? "The note can have up to 500 characters."
-          : "A observação deve ter no máximo 500 caracteres.",
-    };
-  }
-
   const supabase = await createClient();
-
-  const {
-    data: {user},
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect(`/${locale}/auth/login`);
-  }
-
-  const {data: transaction, error: transactionError} = await supabase
-    .from("transactions")
-    .select("id")
-    .eq("id", transactionId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (transactionError || !transaction) {
-    return {
-      error:
-        locale === "en"
-          ? "Transaction not found."
-          : "Lançamento não encontrado.",
+  const {data:{user}} = await supabase.auth.getUser();
+  if (!user) redirect(`/${locale}/auth/login`);
+  const {data,error} = await supabase.rpc("edit_finco_transaction_v1", {
+    p_transaction_id:id,
+    p_expected_updated_at:text(form,"expected_updated_at"),
+    p_description:description,p_amount:amount,p_type:type,p_occurred_on:date,
+    p_payment_method:method,
+    p_account_id:method === "credit_card" ? null : text(form,"account_id") || null,
+    p_credit_card_id:method === "credit_card" ? text(form,"credit_card_id") || null : null,
+    p_category_id:text(form,"category_id") || null,p_notes:notes || null,
+    p_confirm_negative_balance:text(form,"confirm_negative_balance") === "true",
+  });
+  if (error) {
+    console.error("Erro ao editar lançamento:", {code:error.code,message:error.message});
+    const messages: Record<string,[string,string]> = {
+      TRANSACTION_CHANGED:["O lançamento foi alterado em outra operação. Recarregue a página antes de salvar.","This transaction changed. Reload the page before saving."],
+      TRANSACTION_NOT_FOUND:["Lançamento não encontrado.","Transaction not found."],
+      INVALID_CARD:["Selecione um cartão válido.","Select a valid credit card."],
+      INACTIVE_CARD:["O novo cartão está inativo. Selecione outro cartão.","The new card is inactive. Select another card."],
+      INVALID_CARD_DATES:["Confira os dias de fechamento e vencimento do cartão.","Check the card closing and due days."],
+      INVALID_ACCOUNT:["Selecione uma conta válida.","Select a valid account."],
+      INVALID_CATEGORY:["Selecione uma categoria compatível com o tipo do lançamento.","Select a category matching the transaction type."],
+      INVALID_METHOD:["Selecione uma forma de pagamento válida.","Select a valid payment method."],
+      SPECIAL_TRANSACTION:["Transferências precisam ser editadas no fluxo próprio de transferências.","Use the transfer workflow to edit transfers."],
+      STATEMENT_PAYMENT:["Este registro é um pagamento de fatura e não pode ser convertido em compra.","This is a statement payment and cannot be converted to a purchase."],
+      INCONSISTENT_ORIGIN:["O vínculo original com a fatura está inconsistente. Nenhuma alteração foi salva.","The original statement link is inconsistent. No changes were saved."],
+      INCONSISTENT_STATEMENT_TOTAL:["O total atual da fatura precisa de conferência. Nenhuma alteração foi salva.","The current statement total needs review. No changes were saved."],
     };
-  }
-
-  let selectedAccount: {
-    id: string;
-    name: string;
-    initial_balance: number | string | null;
-  } | null = null;
-
-  if (accountId) {
-    const {data: account, error: accountError} = await supabase
-      .from("accounts")
-      .select("id, name, initial_balance")
-      .eq("id", accountId)
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    if (accountError || !account) {
-      return {
-        error:
-          locale === "en"
-            ? "The selected account is invalid."
-            : "A conta selecionada não é válida.",
-      };
+    const key = Object.keys(messages).find((item) => error.message.includes(item));
+    if (key) return {error:messages[key][en ? 1 : 0]};
+    if (error.code === "PGRST202" || error.message.includes("edit_finco_transaction_v1")) {
+      return {error:en ? "Install the included database migration before using this editor." : "Aplique a migração SQL incluída no pacote antes de usar esta edição."};
     }
-
-    selectedAccount = account;
+    return {error:en ? "Could not save the transaction. Check the server logs. No partial save is expected from this operation." : "Não foi possível salvar. Confira o log do servidor; esta operação não deve deixar alterações parciais."};
   }
-
-  if (categoryId) {
-    const {data: category, error: categoryError} = await supabase
-      .from("categories")
-      .select("id, type")
-      .eq("id", categoryId)
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    if (categoryError || !category) {
-      return {
-        error:
-          locale === "en"
-            ? "The selected category is invalid."
-            : "A categoria selecionada não é válida.",
-      };
-    }
-
-    if (category.type !== type) {
-      return {
-        error:
-          locale === "en"
-            ? "Choose a category with the same type as the transaction."
-            : "Escolha uma categoria do mesmo tipo do lançamento.",
-      };
-    }
+  const result = data as {ok?:boolean; requiresNegativeBalanceConfirmation?:boolean; accounts?:Array<{account:string;balance:number}>};
+  if (result?.requiresNegativeBalanceConfirmation) {
+    const currency = new Intl.NumberFormat(en ? "en-US" : "pt-BR",{style:"currency",currency:"BRL"});
+    const balances = (result.accounts ?? []).map((item) => `${item.account}: ${currency.format(Number(item.balance))}`).join("; ");
+    return {requiresNegativeBalanceConfirmation:true,warning:(en ? "Projected negative balance: " : "Saldo negativo previsto: ")+balances};
   }
-
-  if (type === "expense" && selectedAccount) {
-    try {
-      const balanceWithoutCurrentTransaction =
-        await getAccountBalanceWithoutTransaction({
-          supabase,
-          userId: user.id,
-          accountId: selectedAccount.id,
-          initialBalance: selectedAccount.initial_balance,
-          transactionId,
-        });
-
-      const projectedBalance = balanceWithoutCurrentTransaction - amount;
-
-      if (projectedBalance < 0 && !confirmedNegativeBalance) {
-        const currentBalanceText = formatCurrency(
-          balanceWithoutCurrentTransaction,
-          locale,
-        );
-
-        const projectedBalanceText = formatCurrency(
-          projectedBalance,
-          locale,
-        );
-
-        return {
-          warning:
-            locale === "en"
-              ? `This update will make the "${selectedAccount.name}" account negative. Balance without this transaction: ${currentBalanceText}. Projected balance: ${projectedBalanceText}.`
-              : `Esta alteração deixará a conta "${selectedAccount.name}" negativa. Saldo sem este lançamento: ${currentBalanceText}. Saldo após a alteração: ${projectedBalanceText}.`,
-          requiresNegativeBalanceConfirmation: true,
-        };
-      }
-    } catch (balanceError) {
-      console.error(
-        "Erro ao calcular saldo da conta durante edição:",
-        balanceError,
-      );
-
-      return {
-        error:
-          locale === "en"
-            ? "Could not validate the account balance."
-            : "Não foi possível validar o saldo da conta.",
-      };
-    }
-  }
-
-  const {error: updateError} = await supabase
-    .from("transactions")
-    .update({
-      description,
-      amount,
-      type,
-      occurred_on: occurredOn,
-      account_id: accountId,
-      category_id: categoryId,
-      payment_method: paymentMethod,
-      notes,
-    })
-    .eq("id", transaction.id)
-    .eq("user_id", user.id);
-
-  if (updateError) {
-    console.error("Erro detalhado ao atualizar lançamento:", {
-      code: updateError.code,
-      message: updateError.message,
-      details: updateError.details,
-      hint: updateError.hint,
-    });
-
-    return {
-      error:
-        locale === "en"
-          ? "Could not update the transaction."
-          : "Não foi possível atualizar o lançamento.",
-    };
-  }
-
-  revalidateTransactionPaths(locale, transactionId);
-
+  if (!result?.ok) return {error:en ? "The server did not confirm the update." : "O servidor não confirmou a alteração."};
+  for (const route of ["dashboard","transactions","accounts","cards","reports","budgets","financial-health","recurring"]) revalidatePath(`/${locale}/${route}`);
+  revalidatePath(`/${locale}/cards`,"layout");
+  revalidatePath(`/${locale}/transactions/${id}/edit`);
   redirect(`/${locale}/transactions`);
 }
