@@ -682,14 +682,12 @@ const userFirstName = userFullName?.trim().split(/\s+/)[0] ?? null
     },
   )
 
-  const categorySpending: CategorySpending[] = Array.from(categoryMap.values())
-    .sort((first, second) => second.amount - first.amount)
-    .slice(0, 5)
-    .map((category) => ({
-      ...category,
-      percentage:
-        expenses > 0 ? Math.min((category.amount / expenses) * 100, 100) : 0,
-    }))
+const categorySpending: CategorySpending[] = Array.from(categoryMap.values())
+  .sort((first, second) => second.amount - first.amount)
+  .map((category) => ({
+    ...category,
+    percentage: expenses > 0 ? (category.amount / expenses) * 100 : 0,
+  }))
 
   const spendingSourceMap = new Map<string, Omit<SpendingSource, "percentage">>()
   ;((spendingSourceData ?? []) as unknown as SpendingSourceTransaction[]).forEach((transaction) => {
