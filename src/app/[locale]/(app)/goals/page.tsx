@@ -5,6 +5,8 @@ import {createClient} from "@/lib/supabase/server";
 import {CategoryIcon} from "@/components/categories/category-icon";
 import {GoalActions} from "@/components/goals/goal-actions";
 import {GoalCreateModal} from "@/components/goals/goal-create-modal";
+import {GoalEvolutionChart} from "@/components/goals/goal-evolution-chart";
+import {loadGoalContributions} from "@/lib/finance/load-goal-contributions";
 
 export const metadata: Metadata = {
   title: "Metas e objetivos",
@@ -896,10 +898,15 @@ export default async function GoalsPage({params}: GoalsPageProps) {
                       </div>
 
                       <div className="mt-3">
-                        <GoalSparkline
-                          color={goal.color || "#10b981"}
-                          values={evolutionValues}
-                        />
+<GoalEvolutionChart
+  contributions={goalContributions}
+  currentAmount={currentAmount}
+  targetAmount={targetAmount}
+  createdAt={goal.created_at}
+  today={today}
+  locale={locale}
+  color={goal.color}
+/>
                       </div>
 
                       <div className="flex justify-between text-[10px] font-medium text-slate-600">
