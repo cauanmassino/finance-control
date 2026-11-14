@@ -20,14 +20,19 @@ function isValidDate(value: string) {
     return false;
   }
 
-  const parsedDate = new Date(`${value}T12:00:00`);
+  const parsedDate = new Date(`${value}T00:00:00.000Z`);
 
-  return !Number.isNaN(parsedDate.getTime());
+  if (Number.isNaN(parsedDate.getTime())) {
+    return false;
+  }
+
+  return parsedDate.toISOString().slice(0, 10) === value;
 }
 
 function revalidatePaths(locale: string) {
   revalidatePath(`/${locale}`);
   revalidatePath(`/${locale}/dashboard`);
+  revalidatePath(`/${locale}/accounts`);
   revalidatePath(`/${locale}/transactions`);
   revalidatePath(`/${locale}/transfers`);
   revalidatePath(`/${locale}/reports`);
@@ -39,13 +44,14 @@ export async function createTransfer(
 ): Promise<TransferState> {
   const locale = getText(formData, "locale");
   const description = getText(formData, "description");
-  const amount = Number(getText(formData, "amount"));
+  const amountText = getText(formData, "amount");
+  const amount = Number(amountText);
   const occurredOn = getText(formData, "occurred_on");
   const fromAccountId = getText(formData, "from_account_id");
   const toAccountId = getText(formData, "to_account_id");
   const notes = getText(formData, "notes") || null;
 
-  if (!locale) {
+  if (!locale || !/^[a-z]{2}(?:-[A-Za-z]{2})?$/.test(locale)) {
     return {
       error: "Idioma inválido.",
     };
@@ -63,7 +69,7 @@ export async function createTransfer(
     };
   }
 
-  if (!Number.isFinite(amount) || amount <= 0) {
+  if (!amountText || !Number.isFinite(amount) || amount <= 0) {
     return {
       error: "Informe um valor maior que zero.",
     };
@@ -97,9 +103,10 @@ export async function createTransfer(
 
   const {
     data: {user},
+    error: authError,
   } = await supabase.auth.getUser();
 
-  if (!user) {
+  if (authError || !user) {
     redirect(`/${locale}/auth/login`);
   }
 
@@ -109,7 +116,28 @@ export async function createTransfer(
     .eq("user_id", user.id)
     .in("id", [fromAccountId, toAccountId]);
 
-  if (accountsError || accounts?.length !== 2) {
+  if (accountsError) {
+    console.error("Erro ao validar contas da transferência:", {
+      code: accountsError.code,
+      message: accountsError.message,
+      details: accountsError.details,
+      hint: accountsError.hint,
+    });
+
+    return {
+      error: "Não foi possível validar as contas. Tente novamente.",
+    };
+  }
+
+  const accountIds = new Set(
+    (accounts ?? []).map((account) => account.id),
+  );
+
+  if (
+    accountIds.size !== 2 ||
+    !accountIds.has(fromAccountId) ||
+    !accountIds.has(toAccountId)
+  ) {
     return {
       error: "Uma ou mais contas selecionadas não são válidas.",
     };
@@ -117,34 +145,27 @@ export async function createTransfer(
 
   const transferId = randomUUID();
 
+  // Uma única linha representa a transferência completa.
+  // O cálculo de saldo da página de contas:
+  // - subtrai amount de account_id;
+  // - soma amount em transfer_account_id.
+  //
+  // Não inserir uma segunda linha com as contas invertidas,
+  // pois isso anularia o efeito da transferência.
   const {error: transferError} = await supabase
     .from("transactions")
-    .insert([
-      {
-        user_id: user.id,
-        description,
-        amount,
-        type: "transfer",
-        occurred_on: occurredOn,
-        account_id: fromAccountId,
-        transfer_account_id: toAccountId,
-        transfer_id: transferId,
-        payment_method: "other",
-        notes,
-      },
-      {
-        user_id: user.id,
-        description,
-        amount,
-        type: "transfer",
-        occurred_on: occurredOn,
-        account_id: toAccountId,
-        transfer_account_id: fromAccountId,
-        transfer_id: transferId,
-        payment_method: "other",
-        notes,
-      },
-    ]);
+    .insert({
+      user_id: user.id,
+      description,
+      amount,
+      type: "transfer",
+      occurred_on: occurredOn,
+      account_id: fromAccountId,
+      transfer_account_id: toAccountId,
+      transfer_id: transferId,
+      payment_method: "transfer",
+      notes,
+    });
 
   if (transferError) {
     console.error("Erro detalhado ao criar transferência:", {
@@ -153,6 +174,33 @@ export async function createTransfer(
       details: transferError.details,
       hint: transferError.hint,
     });
+
+    if (
+      transferError.code === "23514" &&
+      transferError.message.includes(
+        "transactions_payment_method_check",
+      )
+    ) {
+      return {
+        error:
+          'O banco rejeitou o método "transfer". ' +
+          "É necessário conferir a expressão completa da regra " +
+          "transactions_payment_method_check.",
+      };
+    }
+
+    if (
+      transferError.code === "23502" &&
+      transferError.message.includes("payment_method")
+    ) {
+      return {
+        error:
+          "O banco recebeu um método de pagamento vazio, " +
+          'mesmo com o envio de "transfer". ' +
+          "Confira se o código atualizado está em execução " +
+          "e se há algum trigger alterando esse campo.",
+      };
+    }
 
     return {
       error: "Não foi possível criar a transferência.",
